@@ -233,12 +233,12 @@ Store as `Puzzle(kind="brilliant")` — the column already exists; puzzle positi
 Work in this exact order; each step ends with something runnable and its tests passing before moving on. Phase 2 must be fully working and deployed before Phase 3 begins (DESIGN mandate).
 
 ### Phase 2
-1. [ ] **Variation helpers:** `variation_board` / `variation_move_uci` / `mover_moves_in_line` in `app/analysis.py` + tests against fixtures.
-2. [ ] **Attempt endpoint rework:** `move_index`, positional validation, `opponent_reply_uci`, `line_complete`, mid-line spoiler stripping, mate exception per step, rate-limit bump. API tests incl. single-move regression.
-3. [ ] **Frontend line mode:** mode toggle, guided line flow with auto-replies, full-line reveal animation, summary scoring = clean lines. Manual test against a real account.
-4. [ ] **Coverage-window sync:** migration (`history_fetched_until`), backward-fill logic, `until` in the Lichess client, period caps in config. Sync + client tests.
-5. [ ] **Period endpoint + UI:** `period` param, `played_at` filtering, period picker, loading copy, longer read timeout. API tests + `last20` regression.
-6. [ ] **Deploy + calibrate:** Railway deploy, run Year/All against the §6.3 calibration accounts, sanity-check pool sizes and fetch times; tune caps if needed.
+1. [x] **Variation helpers:** `variation_board` / `variation_move_uci` / `mover_moves_in_line` in `app/analysis.py` + tests against fixtures.
+2. [x] **Attempt endpoint rework:** `move_index`, positional validation, `opponent_reply_uci`, `line_complete`, mid-line spoiler stripping, mate exception per step, rate-limit bump. API tests incl. single-move regression. *Implementation note (2026-07-09): an explicit `mode: single|line` field was added to `AttemptRequest` — `move_index` alone can't distinguish a Phase 1 single-move attempt from the first move of a line attempt, and this plan requires both an opponent reply on index-0 line attempts and unchanged single-move behavior.*
+3. [x] **Frontend line mode:** mode toggle, guided line flow with auto-replies, full-line reveal animation, summary scoring = clean lines. Verified in a real (headless) browser against a real account.
+4. [x] **Coverage-window sync:** migration (`history_fetched_until`), backward-fill logic, `until` in the Lichess client, period caps in config. Sync + client tests.
+5. [x] **Period endpoint + UI:** `period` param, `played_at` filtering, period picker, loading copy, longer read timeout. API tests + `last20` regression.
+6. [ ] **Deploy + calibrate:** Railway deploy, run Year/All against the §6.3 calibration accounts, sanity-check pool sizes and fetch times; tune caps if needed. *(Pending merge of `phase-2-depth`.)*
 
 ### Phase 3
 7. [ ] **Engine module + Dockerfile:** Stockfish in the image, `app/engine.py` producing Lichess-shaped analysis, `--network none` boot check, engine-marked tests.

@@ -6,9 +6,11 @@ No accounts, no login, no server-side session state — puzzle sessions are enti
 
 **Live at:** https://puzzle-rewind-production.up.railway.app/
 
-## Features (current — Phase 1 MVP + post-MVP hardening)
+## Features (current — Phase 1 MVP + post-MVP hardening + Phase 2 Depth)
 
 - Search any Lichess username; pulls their last 20 analyzed games via the public Lichess API (no auth required).
+- **Full line mode** (Phase 2): instead of a single move, find up to the first 3 of your moves in the engine's refutation line — the app auto-plays the opponent's replies, and any miss reveals the whole line played out on the board.
+- **Time periods** (Phase 2): mine puzzles from the last day, week, month, year, or all time (capped at 300–500 games per fetch to stay polite toward Lichess). The database accumulates each player's puzzle pool across searches, so repeat and shorter-period searches are instant.
 - Blunder detection based on win-percentage swing (not raw centipawns), so puzzles reflect genuinely bad decisions rather than cosmetic eval noise in already-lost positions.
 - Difficulty presets (Beginner / Intermediate / Advanced / Expert) auto-selected from the player's rating in each game — each button shows its real win%-drop value, and a live threshold slider shows/snaps to it (disabled under Auto, since Auto picks a different threshold per game rather than one fixed number).
 - Interactive board (chessground + chess.js) with legal-move-only drag-and-drop, instant correct/incorrect feedback, and a "give up / show solution" path.
