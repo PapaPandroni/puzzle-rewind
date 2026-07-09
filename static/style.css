@@ -178,6 +178,12 @@ h2 {
   color: var(--text-dim);
 }
 
+.task-line {
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+}
+
 .board-wrap {
   width: 100%;
   max-width: 560px;
@@ -254,6 +260,11 @@ h2 {
   text-decoration: underline;
   cursor: pointer;
   font-size: 0.9rem;
+}
+
+.link-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .puzzle-counter {
