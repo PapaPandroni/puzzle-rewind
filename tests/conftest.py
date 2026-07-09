@@ -9,8 +9,15 @@ from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db
 from app.main import app
+from app.rate_limit import limiter
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limiter():
+    limiter.reset()
+    yield
 
 
 def load_ndjson_fixture(name: str) -> list[dict]:

@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 
 import chess
-from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -13,6 +13,7 @@ from app.config import settings
 from app.database import get_db
 from app.lichess import LichessRateLimited, LichessUserNotFound, fetch_games
 from app.models import Game, Player, Puzzle
+from app.rate_limit import limiter
 from app.schemas import AttemptRequest, AttemptResponse, PuzzleSetResponse, PuzzleSummary
 
 router = APIRouter()
@@ -117,7 +118,10 @@ def _effective_threshold(preset: Preset, threshold: int | None, game_player_rati
 
 
 @router.get("/api/players/{username}/puzzles", response_model=PuzzleSetResponse)
+@limiter.limit("20/minute")
 async def get_player_puzzles(
+    request: Request,
+    response: Response,
     username: UsernamePath,
     db: Annotated[AsyncSession, Depends(get_db)],
     threshold: Annotated[int | None, Query(ge=10, le=40)] = None,
@@ -192,7 +196,10 @@ async def get_player_puzzles(
 
 
 @router.post("/api/puzzles/{puzzle_id}/attempt", response_model=AttemptResponse)
+@limiter.limit("60/minute")
 async def attempt_puzzle(
+    request: Request,
+    response: Response,
     puzzle_id: int,
     body: AttemptRequest,
     db: Annotated[AsyncSession, Depends(get_db)],

@@ -2,9 +2,13 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 from sqlalchemy import inspect
 
 from app.database import engine
+from app.rate_limit import limiter
 from app.routers.puzzles import router as puzzles_router
 
 
@@ -24,6 +28,10 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Puzzle Rewind", lifespan=lifespan)
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 
 @app.get("/healthz")
