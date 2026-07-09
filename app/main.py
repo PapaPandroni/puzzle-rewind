@@ -27,7 +27,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Puzzle Rewind", lifespan=lifespan)
+app = FastAPI(title="Puzzle Rewind", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
