@@ -53,6 +53,9 @@ async function api(path, opts) {
 
 // --- State 1: Search --------------------------------------------------------
 
+// Must stay in sync with app/config.py Settings.thresholds.
+const PRESET_THRESHOLDS = { beginner: 25, intermediate: 22, advanced: 20, expert: 18 };
+
 function renderSearch() {
   app.innerHTML = "";
   const presets = ["auto", "beginner", "intermediate", "advanced", "expert"];
@@ -64,22 +67,23 @@ function renderSearch() {
         <input id="username-input" type="text" placeholder="Lichess username" autocomplete="off" value="${state.username}" />
         <div class="preset-row">
           ${presets
-            .map(
-              (p) =>
-                `<button type="button" class="preset-btn${state.preset === p ? " active" : ""}" data-preset="${p}">${
-                  p[0].toUpperCase() + p.slice(1)
-                }</button>`
-            )
+            .map((p) => {
+              const label = p[0].toUpperCase() + p.slice(1);
+              const suffix = p === "auto" ? "" : ` &middot; ${PRESET_THRESHOLDS[p]}%`;
+              return `<button type="button" class="preset-btn${state.preset === p ? " active" : ""}" data-preset="${p}">${label}${suffix}</button>`;
+            })
             .join("")}
         </div>
-        <details class="advanced-details">
-          <summary>Advanced: custom threshold</summary>
+        <div class="threshold-section">
+          <p class="hint">Auto matches difficulty to your rating in each game; the other presets use one fixed threshold.</p>
           <label class="slider-label">
-            Win% drop threshold: <span id="threshold-value">${state.threshold ?? 25}</span>
-            <input id="threshold-slider" type="range" min="10" max="40" step="1" value="${state.threshold ?? 25}" />
+            Win% drop threshold: <span id="threshold-value">${state.preset === "auto" ? "Auto" : state.threshold ?? 25}</span>
+            <input id="threshold-slider" type="range" min="10" max="40" step="1" value="${state.threshold ?? 25}" ${
+              state.preset === "auto" ? "disabled" : ""
+            } />
           </label>
           <p class="hint">How big a mistake counts as a puzzle: lower = more, subtler puzzles.</p>
-        </details>
+        </div>
         <button type="submit" class="search-btn">Find puzzles</button>
       </form>
       ${state.loading ? `<p class="status">Fetching games from Lichess&hellip; this can take a few seconds.</p>` : ""}
@@ -92,7 +96,7 @@ function renderSearch() {
   wrap.querySelectorAll(".preset-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       state.preset = btn.dataset.preset;
-      state.threshold = null;
+      state.threshold = state.preset === "auto" ? null : PRESET_THRESHOLDS[state.preset];
       renderSearch();
     });
   });

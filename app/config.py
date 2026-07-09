@@ -16,9 +16,17 @@ class Settings(BaseSettings):
     # against real accounts (halilegebaylam, denisborisovv, peremil, biku008,
     # profile15, lance5500, zhigalko_sergei) so a ~20-24-game fetch yields roughly
     # 10-30 puzzles per band. Individual accounts still vary — see §6.3 notes.
+    #
+    # intermediate lowered 25->22 to differentiate it from beginner (previously
+    # identical). beginner deliberately left untouched: raising it can only ever
+    # reduce puzzle counts, and halilegebaylam (a real beginner-band account) is
+    # already a low-volatility outlier under the 10-puzzle floor at 25 — pushing
+    # beginner higher would only starve accounts like it further. Re-verified
+    # against live 20-game fetches for denisborisovv/halilegebaylam (beginner)
+    # and peremil (intermediate) before this change.
     thresholds: dict[str, int] = {
         "beginner": 25,
-        "intermediate": 25,
+        "intermediate": 22,
         "advanced": 20,
         "expert": 18,
     }

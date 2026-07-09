@@ -90,12 +90,6 @@ h2 {
   font-weight: 600;
 }
 
-.advanced-details summary {
-  cursor: pointer;
-  color: var(--text-dim);
-  font-size: 0.9rem;
-}
-
 .slider-label {
   display: block;
   margin-top: 10px;
@@ -106,6 +100,11 @@ h2 {
 .slider-label input[type="range"] {
   width: 100%;
   margin-top: 6px;
+}
+
+.slider-label input[type="range"]:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .hint {
