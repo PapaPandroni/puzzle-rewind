@@ -12,6 +12,12 @@ class Settings(BaseSettings):
     max_games_mvp: int = 20
     min_win_drop_stored: float = 10.0
 
+    # Period backfill guardrails (§13.2): caps keep single fetches polite toward
+    # Lichess; the longer timeout covers streams of hundreds of games.
+    max_games_period_short: int = 300  # day / week / month
+    max_games_period_long: int = 500  # year / all time
+    period_fetch_timeout_seconds: float = 60.0
+
     # TUNING: preset win%-drop thresholds. Calibrated per DESIGN.md §6.3/§15 step 8
     # against real accounts (halilegebaylam, denisborisovv, peremil, biku008,
     # profile15, lance5500, zhigalko_sergei) so a ~20-24-game fetch yields roughly

@@ -41,75 +41,128 @@ def _game_url(game: Game, ply: int) -> str:
     return f"https://lichess.org/{game.lichess_id}{suffix}#{ply}"
 
 
-async def _sync_player_games(db: AsyncSession, player: Player, username: str) -> str | None:
-    """Fetch new games from Lichess and persist Game/Puzzle rows (§7 cache flow).
+def _to_epoch_ms(dt: datetime) -> int:
+    return int(dt.replace(tzinfo=UTC).timestamp() * 1000)
 
-    Returns a "reason" string for empty results (no analyzed games / user has none),
-    or None on success. Raises LichessUserNotFound / LichessRateLimited upstream.
-    """
-    since_ms: int | None = None
-    latest = await db.scalar(
-        select(Game.played_at).where(Game.player_id == player.id).order_by(Game.played_at.desc())
+
+async def _persist_game(db: AsyncSession, player: Player, username: str, game: dict) -> bool:
+    """Store one exported game + its puzzle candidates; False if skipped or known."""
+    existing = await db.scalar(select(Game).where(Game.lichess_id == game["id"]))
+    if existing is not None:
+        return False
+
+    color = determine_player_color(game, username)
+    if color is None:
+        return False
+
+    opponent_color = "black" if color == "white" else "white"
+    # Games vs the Lichess AI (or other non-human opponents) omit "rating"
+    # entirely instead of using a sentinel value — skip, since Game.opponent_rating
+    # is non-nullable and these aren't meaningful puzzle sources anyway.
+    if "rating" not in game["players"][opponent_color]:
+        return False
+
+    game_row = Game(
+        lichess_id=game["id"],
+        player_id=player.id,
+        player_color=color,
+        player_rating=game["players"][color]["rating"],
+        opponent_name=game["players"][opponent_color].get("user", {}).get("name", "?"),
+        opponent_rating=game["players"][opponent_color]["rating"],
+        speed=game["speed"],
+        played_at=datetime.fromtimestamp(game["createdAt"] / 1000, tz=UTC).replace(tzinfo=None),
+        raw_analysis_processed=True,
     )
-    if latest is not None:
-        since_ms = int(latest.replace(tzinfo=UTC).timestamp() * 1000)
+    db.add(game_row)
+    await db.flush()  # assign game_row.id
 
-    fetched_any = False
-    async for game in fetch_games(username, max_games=settings.max_games_mvp, since=since_ms):
-        fetched_any = True
-        lichess_id = game["id"]
-
-        existing = await db.scalar(select(Game).where(Game.lichess_id == lichess_id))
-        if existing is not None:
-            continue
-
-        color = determine_player_color(game, username)
-        if color is None:
-            continue
-
-        opponent_color = "black" if color == "white" else "white"
-        # Games vs the Lichess AI (or other non-human opponents) omit "rating"
-        # entirely instead of using a sentinel value — skip, since Game.opponent_rating
-        # is non-nullable and these aren't meaningful puzzle sources anyway.
-        if "rating" not in game["players"][opponent_color]:
-            continue
-
-        game_row = Game(
-            lichess_id=lichess_id,
-            player_id=player.id,
-            player_color=color,
-            player_rating=game["players"][color]["rating"],
-            opponent_name=game["players"][opponent_color].get("user", {}).get("name", "?"),
-            opponent_rating=game["players"][opponent_color]["rating"],
-            speed=game["speed"],
-            played_at=datetime.fromtimestamp(game["createdAt"] / 1000, tz=UTC).replace(tzinfo=None),
-            raw_analysis_processed=True,
-        )
-        db.add(game_row)
-        await db.flush()  # assign game_row.id
-
-        for puzzle_data in extract_puzzles(game, username, settings.min_win_drop_stored):
-            db.add(
-                Puzzle(
-                    game_id=game_row.id,
-                    ply=puzzle_data["ply"],
-                    fen=puzzle_data["fen"],
-                    side_to_move=puzzle_data["side_to_move"],
-                    solution_uci=puzzle_data["solution_uci"],
-                    solution_san=puzzle_data["solution_san"],
-                    played_uci=puzzle_data["played_uci"],
-                    played_san=puzzle_data["played_san"],
-                    variation_san=" ".join(puzzle_data["variation_san"]),
-                    win_drop=puzzle_data["win_drop"],
-                    eval_before_cp=puzzle_data["eval_before_cp"],
-                    eval_after_cp=puzzle_data["eval_after_cp"],
-                )
+    for puzzle_data in extract_puzzles(game, username, settings.min_win_drop_stored):
+        db.add(
+            Puzzle(
+                game_id=game_row.id,
+                ply=puzzle_data["ply"],
+                fen=puzzle_data["fen"],
+                side_to_move=puzzle_data["side_to_move"],
+                solution_uci=puzzle_data["solution_uci"],
+                solution_san=puzzle_data["solution_san"],
+                played_uci=puzzle_data["played_uci"],
+                played_san=puzzle_data["played_san"],
+                variation_san=" ".join(puzzle_data["variation_san"]),
+                win_drop=puzzle_data["win_drop"],
+                eval_before_cp=puzzle_data["eval_before_cp"],
+                eval_after_cp=puzzle_data["eval_after_cp"],
             )
+        )
+    return True
 
-    player.last_fetched_at = _utcnow()
+
+async def _sync_player_games(
+    db: AsyncSession,
+    player: Player,
+    username: str,
+    *,
+    forward: bool = True,
+    backfill_start: datetime | None = None,
+    backfill_cap: int = 0,
+) -> str | None:
+    """Fetch games from Lichess and persist Game/Puzzle rows (§7 cache flow, §13.2).
+
+    Two independent directions: `forward` tops up from the newest stored game
+    (TTL-gated by the caller) and `backfill_start` extends the coverage window
+    backwards to that point, fetching at most `backfill_cap` games between it
+    and the oldest stored game. `lichess_id` uniqueness makes overlap harmless.
+
+    Returns a "reason" string for empty results (no analyzed games / user has
+    none), or None. Raises LichessUserNotFound / LichessRateLimited upstream.
+    """
+    fetched_any = False
+    since_ms: int | None = None
+
+    if forward:
+        latest = await db.scalar(
+            select(Game.played_at).where(Game.player_id == player.id).order_by(Game.played_at.desc())
+        )
+        if latest is not None:
+            since_ms = _to_epoch_ms(latest)
+
+        async for game in fetch_games(username, max_games=settings.max_games_mvp, since=since_ms):
+            fetched_any = True
+            await _persist_game(db, player, username, game)
+
+        player.last_fetched_at = _utcnow()
+
+    if backfill_start is not None:
+        oldest = await db.scalar(
+            select(Game.played_at).where(Game.player_id == player.id).order_by(Game.played_at.asc())
+        )
+        received = 0
+        oldest_received: datetime | None = None
+        async for game in fetch_games(
+            username,
+            max_games=backfill_cap,
+            since=_to_epoch_ms(backfill_start),
+            until=_to_epoch_ms(oldest) if oldest is not None else None,
+            timeout=settings.period_fetch_timeout_seconds,
+        ):
+            received += 1
+            played_at = datetime.fromtimestamp(game["createdAt"] / 1000, tz=UTC).replace(tzinfo=None)
+            if oldest_received is None or played_at < oldest_received:
+                oldest_received = played_at
+            await _persist_game(db, player, username, game)
+
+        if received >= backfill_cap and oldest_received is not None:
+            # Cap hit: only claim coverage down to what actually arrived, so a
+            # later request honestly refetches the remaining gap (§13.2).
+            new_until = oldest_received
+        else:
+            new_until = backfill_start
+        # Coverage only ever extends backwards — never shrink an earlier claim.
+        if player.history_fetched_until is None or new_until < player.history_fetched_until:
+            player.history_fetched_until = new_until
+
     await db.commit()
 
-    if not fetched_any and since_ms is None:
+    if forward and not fetched_any and since_ms is None:
         return "no_analyzed_games"
     return None
 

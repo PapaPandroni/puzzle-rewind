@@ -4,7 +4,14 @@ from app.lichess import LichessRateLimited, LichessUserNotFound
 
 
 def _make_fake_fetch_games(games: list[dict]):
-    async def fake_fetch_games(username: str, *, max_games: int = 20, since: int | None = None):
+    async def fake_fetch_games(
+        username: str,
+        *,
+        max_games: int = 20,
+        since: int | None = None,
+        until: int | None = None,
+        timeout: float = 30.0,
+    ):
         for g in games:
             yield g
 
@@ -12,7 +19,14 @@ def _make_fake_fetch_games(games: list[dict]):
 
 
 def _make_raising_fetch_games(exc: Exception):
-    async def fake_fetch_games(username: str, *, max_games: int = 20, since: int | None = None):
+    async def fake_fetch_games(
+        username: str,
+        *,
+        max_games: int = 20,
+        since: int | None = None,
+        until: int | None = None,
+        timeout: float = 30.0,
+    ):
         raise exc
         yield  # pragma: no cover - makes this an async generator
 
@@ -58,7 +72,7 @@ async def test_threshold_filtering_is_query_time_not_refetch(client, monkeypatch
     call_count = 0
     fake = _make_fake_fetch_games(peremil_games)
 
-    async def counting_fake_fetch_games(username, *, max_games=20, since=None):
+    async def counting_fake_fetch_games(username, *, max_games=20, since=None, until=None, timeout=30.0):
         nonlocal call_count
         call_count += 1
         async for g in fake(username, max_games=max_games, since=since):

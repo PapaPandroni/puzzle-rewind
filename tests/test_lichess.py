@@ -19,9 +19,11 @@ def _ndjson_transport(
     return httpx.MockTransport(handler)
 
 
-def _patch_client(monkeypatch, transport: httpx.MockTransport):
-    def _build_client() -> httpx.AsyncClient:
-        return httpx.AsyncClient(transport=transport, timeout=httpx.Timeout(30.0))
+def _patch_client(monkeypatch, transport: httpx.MockTransport, seen_timeouts: list | None = None):
+    def _build_client(timeout: float = 30.0) -> httpx.AsyncClient:
+        if seen_timeouts is not None:
+            seen_timeouts.append(timeout)
+        return httpx.AsyncClient(transport=transport, timeout=httpx.Timeout(timeout))
 
     monkeypatch.setattr(lichess, "_build_client", _build_client)
 
@@ -100,6 +102,47 @@ async def test_fetch_games_empty_stream_yields_nothing(monkeypatch):
     games = [g async for g in lichess.fetch_games("no-analyzed-games-user")]
 
     assert games == []
+
+
+@pytest.mark.asyncio
+async def test_fetch_games_serializes_since_until_and_timeout(monkeypatch):
+    captured_urls: list[httpx.URL] = []
+    seen_timeouts: list[float] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured_urls.append(request.url)
+        return httpx.Response(200, content=b"")
+
+    _patch_client(monkeypatch, httpx.MockTransport(handler), seen_timeouts=seen_timeouts)
+
+    async for _ in lichess.fetch_games(
+        "someone", max_games=300, since=1000, until=2000, timeout=60.0
+    ):
+        pass
+
+    params = dict(captured_urls[0].params)
+    assert params["since"] == "1000"
+    assert params["until"] == "2000"
+    assert params["max"] == "300"
+    assert seen_timeouts == [60.0]
+
+
+@pytest.mark.asyncio
+async def test_fetch_games_omits_since_until_by_default(monkeypatch):
+    captured_urls: list[httpx.URL] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured_urls.append(request.url)
+        return httpx.Response(200, content=b"")
+
+    _patch_client(monkeypatch, httpx.MockTransport(handler))
+
+    async for _ in lichess.fetch_games("someone"):
+        pass
+
+    params = dict(captured_urls[0].params)
+    assert "since" not in params
+    assert "until" not in params
 
 
 @pytest.mark.asyncio

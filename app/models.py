@@ -14,6 +14,9 @@ class Player(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     username: Mapped[str] = mapped_column(String(30), unique=True, index=True)  # lowercase lichess id
     last_fetched_at: Mapped[datetime | None]
+    # Oldest point in time fully fetched back to (§13.2 coverage window); None
+    # means only the initial last-20 window exists. Naive UTC like the rest.
+    history_fetched_until: Mapped[datetime | None]
 
     games: Mapped[list["Game"]] = relationship(back_populates="player")
 

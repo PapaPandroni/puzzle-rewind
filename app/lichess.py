@@ -21,9 +21,9 @@ class LichessRateLimited(Exception):
     pass
 
 
-def _build_client() -> httpx.AsyncClient:
+def _build_client(timeout: float = 30.0) -> httpx.AsyncClient:
     # Factored out so tests can monkeypatch in a client backed by httpx.MockTransport.
-    return httpx.AsyncClient(timeout=httpx.Timeout(30.0))
+    return httpx.AsyncClient(timeout=httpx.Timeout(timeout))
 
 
 async def fetch_games(
@@ -31,11 +31,15 @@ async def fetch_games(
     *,
     max_games: int = settings.max_games_mvp,
     since: int | None = None,
+    until: int | None = None,
+    timeout: float = 30.0,
 ) -> AsyncIterator[dict[str, Any]]:
     """Stream a player's analyzed standard games from the Lichess export API.
 
     Yields one parsed game dict per NDJSON line. Games missing an "analysis"
-    field despite analysed=true are skipped defensively (§5.3).
+    field despite analysed=true are skipped defensively (§5.3). `since`/`until`
+    are epoch milliseconds; period backfills pass a longer `timeout` because
+    hundreds of games stream for tens of seconds (§13.2).
     """
     url = f"{settings.lichess_base}/api/games/user/{username}"
     params: dict[str, Any] = {
@@ -47,12 +51,14 @@ async def fetch_games(
     }
     if since is not None:
         params["since"] = since
+    if until is not None:
+        params["until"] = until
 
     headers = {"Accept": "application/x-ndjson", "User-Agent": USER_AGENT}
     if settings.lichess_token:
         headers["Authorization"] = f"Bearer {settings.lichess_token}"
 
-    async with _build_client() as client:
+    async with _build_client(timeout) as client:
         async with client.stream("GET", url, params=params, headers=headers) as response:
             if response.status_code == 404:
                 raise LichessUserNotFound(username)
