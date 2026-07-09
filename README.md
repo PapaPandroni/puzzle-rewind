@@ -4,19 +4,22 @@ Turn *your own* Lichess games into an endless puzzle stream. Enter any Lichess u
 
 No accounts, no login, no server-side session state — puzzle sessions are entirely stateless.
 
-## Features (current — Phase 1 MVP)
+**Live at:** https://puzzle-rewind-production.up.railway.app/
+
+## Features (current — Phase 1 MVP + post-MVP hardening)
 
 - Search any Lichess username; pulls their last 20 analyzed games via the public Lichess API (no auth required).
 - Blunder detection based on win-percentage swing (not raw centipawns), so puzzles reflect genuinely bad decisions rather than cosmetic eval noise in already-lost positions.
-- Difficulty presets (Beginner / Intermediate / Advanced / Expert) auto-selected from the player's rating in each game, plus an advanced slider for a custom win%-drop threshold.
+- Difficulty presets (Beginner / Intermediate / Advanced / Expert) auto-selected from the player's rating in each game — each button shows its real win%-drop value, and a live threshold slider shows/snaps to it (disabled under Auto, since Auto picks a different threshold per game rather than one fixed number).
 - Interactive board (chessground + chess.js) with legal-move-only drag-and-drop, instant correct/incorrect feedback, and a "give up / show solution" path.
 - Each puzzle links back to the exact move in the original game on Lichess.
-- Session summary ("solved N/M on first try") at the end of a puzzle set.
+- Session summary ("solved N/M on first try") at the end of a puzzle set, plus a "New search" button mid-session so you don't need to reload the page.
 - Results are cached per player in a local database — repeat searches and threshold changes are served instantly without re-hitting Lichess.
+- Per-IP rate limiting on the API, and an optional personal Lichess API token (`LICHESS_TOKEN`) to raise the shared rate-limit ceiling with Lichess — see Configuration below.
 
 ## Tech stack
 
-Python 3.14 · uv · FastAPI · SQLAlchemy 2.0 (async) · Alembic · Pydantic v2 · SQLite (dev) / PostgreSQL (prod) · httpx · python-chess · vanilla JS/HTML/CSS · chessground · chess.js · Railway (deployment target)
+Python 3.14 · uv · FastAPI · SQLAlchemy 2.0 (async) · Alembic · Pydantic v2 · SQLite (dev) / PostgreSQL (prod) · httpx · python-chess · vanilla JS/HTML/CSS · chessground · chess.js · Railway (deployed)
 
 See [`DESIGN.md`](DESIGN.md) for the full design spec, including corrections and calibration notes discovered during implementation.
 
@@ -45,7 +48,9 @@ Copy `.env.example` to `.env` to override defaults:
 cp .env.example .env
 ```
 
-Key setting: `DATABASE_URL` (defaults to `sqlite+aiosqlite:///./dev.db`; use a `postgresql://` or `postgresql+asyncpg://` URL in production — it's normalized automatically).
+Key settings:
+- `DATABASE_URL` (defaults to `sqlite+aiosqlite:///./dev.db`; use a `postgresql://` or `postgresql+asyncpg://` URL in production — it's normalized automatically).
+- `LICHESS_TOKEN` (optional) — a personal Lichess API token (no scopes needed, create one at [lichess.org/account/oauth/token/create](https://lichess.org/account/oauth/token/create)), sent as a Bearer header on outbound Lichess requests. Off by default; only affects rate-limit treatment, not functionality.
 
 ### Running tests
 
