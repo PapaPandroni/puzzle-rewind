@@ -40,3 +40,9 @@ search screen selectors are `#username-input`, `.search-btn`, `button[data-mode=
 `#give-up-btn`, `#next-btn`, `.result-correct`, `.result-incorrect`, `.puzzle-counter`.
 Intercept the search response with `page.expect_response(lambda r: "/puzzles?" in r.url
 and r.status == 200)` to learn puzzle ids/FENs for scripting moves.
+
+To verify loading/busy states deterministically (without a genuinely slow Lichess
+fetch), use the **async** Playwright API and a `page.route` handler that
+`await asyncio.sleep(N)` before `route.continue_()` — the sync API blocks its own
+driver loop if the handler sleeps. Wrap `continue_()` in try/except: a client-side
+AbortController cancel kills the route mid-delay.

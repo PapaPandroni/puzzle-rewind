@@ -16,7 +16,9 @@ export const state = {
   solvedFirstTry: 0, // in line mode: whole lines found without a miss
   lineIndex: 0, // line index (0, 2, 4) of the move currently being sought
   loading: false,
+  abort: null, // AbortController for the in-flight search, if any
   error: null,
+  notice: null, // neutral (non-error) status line, e.g. "Search cancelled."
   cg: null,
 };
 

@@ -125,14 +125,65 @@ h2 {
   cursor: pointer;
 }
 
-.search-btn:hover,
-.primary-btn:hover {
+.search-btn:hover:not(:disabled),
+.primary-btn:hover:not(:disabled) {
   background: var(--accent-hover);
+}
+
+.preset-btn:disabled,
+.search-btn:disabled,
+#username-input:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .status {
   color: var(--text-dim);
   margin-top: 16px;
+}
+
+/* --- In-flight search feedback --- */
+
+.loading-block {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.loading-block .status {
+  margin: 0;
+}
+
+.progress-bar {
+  width: 100%;
+  max-width: 420px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.progress-fill {
+  width: 35%;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+  /* Indeterminate: real progress isn't reported until Phase 3's job queue. */
+  animation: progress-slide 1.2s ease-in-out infinite;
+}
+
+@keyframes progress-slide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    /* Own-width percentages: the 35%-wide fill must travel ~285% + its own
+       width to fully exit a 100%-wide track. */
+    transform: translateX(300%);
+  }
 }
 
 .error {
