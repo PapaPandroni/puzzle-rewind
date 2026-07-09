@@ -6,8 +6,11 @@ from app.analysis import (
     determine_player_color,
     find_blunder_plies,
     move_delivers_checkmate,
+    mover_moves_in_line,
     preset_for_rating,
     replay_to_ply,
+    variation_board,
+    variation_move_uci,
     win_percent_for_color,
     win_percent_white,
 )
@@ -194,3 +197,68 @@ def test_move_delivers_checkmate_false_for_non_mating_move():
 def test_move_delivers_checkmate_false_for_illegal_move():
     board = chess.Board()
     assert not move_delivers_checkmate(board, "e2e5")
+
+
+# --- variation helpers (§13.1, Phase 2) ---------------------------------------
+
+
+def test_variation_replays_fully_on_fixture_line(peremil_games):
+    game = peremil_games[2]
+    ply = 34
+    puzzle = build_puzzle(game, ply, win_drop=38.5)
+    line = puzzle["variation_san"]
+    assert len(line) >= 2, "fixture puzzle expected to carry a variation"
+
+    # The whole stored line must replay legally from the puzzle FEN...
+    board = variation_board(puzzle["fen"], line, len(line))
+    assert board is not None
+    # ...and its first move is the puzzle solution (the variation starts with `best`).
+    assert variation_move_uci(puzzle["fen"], line, 0) == puzzle["solution_uci"]
+    # Every index resolves to a UCI move.
+    assert all(variation_move_uci(puzzle["fen"], line, i) is not None for i in range(len(line)))
+
+
+def test_variation_move_uci_handles_promotion():
+    # White pawn a7 promotes; kings far apart so no incidental checks confuse SAN.
+    fen = "8/P6k/8/8/8/8/8/7K w - - 0 1"
+    line = ["a8=Q", "Kg6", "Qg8+"]
+    assert variation_move_uci(fen, line, 0) == "a7a8q"
+    assert variation_move_uci(fen, line, 1) == "h7g6"
+    assert variation_move_uci(fen, line, 2) == "a8g8"
+    assert variation_board(fen, line, len(line)) is not None
+
+
+def test_variation_move_uci_handles_castling_and_disambiguation():
+    fen = "r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1"
+    line = ["O-O", "O-O-O", "Rae1"]
+    assert variation_move_uci(fen, line, 0) == "e1g1"  # python-chess UCI for O-O
+    assert variation_move_uci(fen, line, 1) == "e8c8"
+    # "Rae1" needs the file disambiguator (both a1 and f1 rooks reach e1).
+    assert variation_move_uci(fen, line, 2) == "a1e1"
+
+
+def test_variation_helpers_treat_unparseable_san_as_line_end():
+    fen = chess.STARTING_FEN
+    garbage = ["e4", "Zz9", "Nf3"]
+    assert variation_board(fen, garbage, 3) is None
+    assert variation_move_uci(fen, garbage, 1) is None
+    assert variation_move_uci(fen, garbage, 2) is None  # beyond the break too
+    # Legal SAN syntax but illegal in the position counts as unparseable as well.
+    illegal = ["e4", "e4"]
+    assert variation_board(fen, illegal, 2) is None
+
+
+def test_variation_move_uci_out_of_range():
+    fen = chess.STARTING_FEN
+    line = ["e4", "e5"]
+    assert variation_move_uci(fen, line, 2) is None
+    assert variation_move_uci(fen, line, -1) is None
+
+
+def test_mover_moves_in_line_lengths_and_cap():
+    line = ["e4", "e5", "Nf3", "Nc6", "Bb5", "a6", "Ba4"]
+    expected_by_length = {1: 1, 2: 1, 3: 2, 4: 2, 5: 3, 6: 3, 7: 3}
+    for length, expected in expected_by_length.items():
+        assert mover_moves_in_line(line[:length]) == expected, f"length {length}"
+    assert mover_moves_in_line([]) == 0
+    assert mover_moves_in_line(line, cap=5) == 4  # ceil(7/2), cap not binding

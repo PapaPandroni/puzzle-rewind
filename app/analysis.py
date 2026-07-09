@@ -162,6 +162,43 @@ def extract_puzzles(
     ]
 
 
+def variation_board(fen: str, variation_san: list[str], upto: int) -> chess.Board | None:
+    """Board after pushing `variation_san[:upto]` onto the puzzle FEN (§13.1).
+
+    Returns None if any SAN in the prefix fails to parse — the line is treated
+    as ended rather than guessed at (defensive; Lichess lines are well-formed).
+    """
+    board = chess.Board(fen)
+    for san in variation_san[:upto]:
+        try:
+            board.push_san(san)
+        except ValueError:
+            return None
+    return board
+
+
+def variation_move_uci(fen: str, variation_san: list[str], index: int) -> str | None:
+    """UCI of `variation_san[index]` played at its reconstructed position.
+
+    SAN is position-dependent, so the move must be parsed on the board reached
+    after the preceding line moves. None if out of range or unparseable.
+    """
+    if index < 0 or index >= len(variation_san):
+        return None
+    board = variation_board(fen, variation_san, index)
+    if board is None:
+        return None
+    try:
+        return board.parse_san(variation_san[index]).uci()
+    except ValueError:
+        return None
+
+
+def mover_moves_in_line(variation_san: list[str], cap: int = 3) -> int:
+    """How many line moves the user must find (§13.1): even indices 0, 2, 4, capped."""
+    return min(cap, math.ceil(len(variation_san) / 2))
+
+
 def move_delivers_checkmate(board: chess.Board, uci: str) -> bool:
     """Whether pushing `uci` on `board` delivers checkmate (§6.5 correction).
 
