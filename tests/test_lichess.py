@@ -8,8 +8,12 @@ from app import lichess
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 
-def _ndjson_transport(body: bytes, status_code: int = 200) -> httpx.MockTransport:
+def _ndjson_transport(
+    body: bytes, status_code: int = 200, captured_headers: dict | None = None
+) -> httpx.MockTransport:
     def handler(request: httpx.Request) -> httpx.Response:
+        if captured_headers is not None:
+            captured_headers.update(request.headers)
         return httpx.Response(status_code, content=body)
 
     return httpx.MockTransport(handler)
@@ -96,3 +100,26 @@ async def test_fetch_games_empty_stream_yields_nothing(monkeypatch):
     games = [g async for g in lichess.fetch_games("no-analyzed-games-user")]
 
     assert games == []
+
+
+@pytest.mark.asyncio
+async def test_fetch_games_no_auth_header_by_default(monkeypatch):
+    captured: dict = {}
+    _patch_client(monkeypatch, _ndjson_transport(b"", captured_headers=captured))
+
+    async for _ in lichess.fetch_games("someone"):
+        pass
+
+    assert "authorization" not in captured
+
+
+@pytest.mark.asyncio
+async def test_fetch_games_sends_bearer_token_when_configured(monkeypatch):
+    monkeypatch.setattr(lichess.settings, "lichess_token", "test-token")
+    captured: dict = {}
+    _patch_client(monkeypatch, _ndjson_transport(b"", captured_headers=captured))
+
+    async for _ in lichess.fetch_games("someone"):
+        pass
+
+    assert captured["authorization"] == "Bearer test-token"

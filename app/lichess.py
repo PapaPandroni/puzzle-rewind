@@ -49,6 +49,8 @@ async def fetch_games(
         params["since"] = since
 
     headers = {"Accept": "application/x-ndjson", "User-Agent": USER_AGENT}
+    if settings.lichess_token:
+        headers["Authorization"] = f"Bearer {settings.lichess_token}"
 
     async with _build_client() as client:
         async with client.stream("GET", url, params=params, headers=headers) as response:

@@ -6,6 +6,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     database_url: str = "sqlite+aiosqlite:///./dev.db"
+    lichess_token: str | None = None
     cache_ttl_seconds: int = 3600
     lichess_base: str = "https://lichess.org"
     max_games_mvp: int = 20
