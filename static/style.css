@@ -149,6 +149,14 @@ h2 {
   gap: 12px;
 }
 
+.puzzle-topbar {
+  display: flex;
+}
+
+.puzzle-topbar .link-btn {
+  padding: 0;
+}
+
 .puzzle-header {
   display: flex;
   justify-content: space-between;
@@ -255,6 +263,17 @@ h2 {
   font-size: 0.85rem;
 }
 
+.thanks-note {
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  margin: 4px 0 0;
+}
+
+.thanks-note a {
+  color: var(--text-dim);
+}
+
 /* --- Summary screen --- */
 
 .summary-screen {
@@ -267,6 +286,11 @@ h2 {
 
 .summary-screen .primary-btn {
   margin-top: 16px;
+}
+
+.app-footer {
+  text-align: center;
+  margin-top: 24px;
 }
 
 @media (prefers-color-scheme: light) {

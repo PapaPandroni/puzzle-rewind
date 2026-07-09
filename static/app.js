@@ -21,6 +21,20 @@ function el(html) {
   return t.content.firstElementChild;
 }
 
+function goToSearch() {
+  state.puzzles = [];
+  state.error = null;
+  renderSearch();
+}
+
+function renderFooter() {
+  return el(`
+    <footer class="app-footer">
+      <a href="https://github.com/PapaPandroni/puzzle-rewind" target="_blank" rel="noopener" class="link-btn">About</a>
+    </footer>
+  `);
+}
+
 async function api(path, opts) {
   const res = await fetch(path, opts);
   if (!res.ok) {
@@ -73,6 +87,7 @@ function renderSearch() {
     </div>
   `);
   app.appendChild(wrap);
+  app.appendChild(renderFooter());
 
   wrap.querySelectorAll(".preset-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -154,6 +169,9 @@ function renderPuzzle() {
 
   const wrap = el(`
     <div class="puzzle-screen">
+      <div class="puzzle-topbar">
+        <button id="new-search-btn" class="link-btn">&lsaquo; New search</button>
+      </div>
       <div class="puzzle-header">
         <div class="matchup"><strong>${state.username}</strong> vs ${puzzle.opponent_name} (${puzzle.opponent_rating}) &middot; ${puzzle.speed} &middot; ${date}</div>
         <div class="side-badge">${puzzle.side_to_move === "white" ? "White" : "Black"} to move</div>
@@ -164,9 +182,13 @@ function renderPuzzle() {
         <button id="give-up-btn" class="link-btn">Give up / show solution</button>
       </div>
       <div class="puzzle-counter">Puzzle ${state.index + 1} of ${state.puzzles.length}</div>
+      <p class="thanks-note">Thank you <a href="https://lichess.org" target="_blank" rel="noopener">Lichess</a> for being open source and awesome.</p>
     </div>
   `);
   app.appendChild(wrap);
+  app.appendChild(renderFooter());
+
+  wrap.querySelector("#new-search-btn").addEventListener("click", goToSearch);
 
   const boardEl = wrap.querySelector("#board");
   state.cg = Chessground(boardEl, {
@@ -278,11 +300,8 @@ function renderSummary() {
     </div>
   `);
   app.appendChild(wrap);
-  wrap.querySelector("#search-again-btn").addEventListener("click", () => {
-    state.puzzles = [];
-    state.error = null;
-    renderSearch();
-  });
+  app.appendChild(renderFooter());
+  wrap.querySelector("#search-again-btn").addEventListener("click", goToSearch);
 }
 
 renderSearch();
