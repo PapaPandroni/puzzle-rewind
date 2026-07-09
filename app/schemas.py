@@ -1,6 +1,7 @@
 from datetime import datetime
+from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class PuzzleSummary(BaseModel):
@@ -13,6 +14,7 @@ class PuzzleSummary(BaseModel):
     speed: str
     played_at: datetime
     win_drop: float
+    mover_moves_in_line: int  # how many line moves "Full line" mode requires (≤3)
 
 
 class PuzzleSetResponse(BaseModel):
@@ -25,6 +27,10 @@ class PuzzleSetResponse(BaseModel):
 
 class AttemptRequest(BaseModel):
     move_uci: str | None = None
+    # "line" activates the multi-move flow (§13.1); "single" preserves the
+    # Phase 1 contract exactly, which is why it must be the default.
+    mode: Literal["single", "line"] = "single"
+    move_index: int = Field(default=0, ge=0, le=8)  # even line index of the attempted move
 
 
 class AttemptResponse(BaseModel):
@@ -34,4 +40,5 @@ class AttemptResponse(BaseModel):
     played_san: str
     win_drop: float
     variation_san: list[str]
-    opponent_reply_uci: str | None = None  # phase 2
+    opponent_reply_uci: str | None = None
+    line_complete: bool = True

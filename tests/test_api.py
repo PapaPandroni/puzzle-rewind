@@ -45,7 +45,9 @@ async def test_get_puzzles_full_flow(client, monkeypatch, peremil_games):
         "speed",
         "played_at",
         "win_drop",
+        "mover_moves_in_line",
     }
+    assert 0 <= puzzle["mover_moves_in_line"] <= 3
     # Solution must never leak in the list response.
     assert "solution_uci" not in puzzle
     assert "solution_san" not in puzzle
@@ -238,3 +240,180 @@ async def test_invalid_username_returns_422(client):
 async def test_attempt_unknown_puzzle_returns_404(client):
     resp = await client.post("/api/puzzles/99999/attempt", json={"move_uci": "e2e4"})
     assert resp.status_code == 404
+
+
+# --- line mode (§13.1, Phase 2) ------------------------------------------------
+# Synthetic 5-move line (3 mover moves at indices 0, 2, 4): from the puzzle FEN,
+# white plays Qb4 / Qc4 / Qd4+ against black's a6 / a5 tempo moves. After
+# "Qb4 a6" white also has the alternate mate Qf8# (rank check; g8/g7 covered by
+# the queen, h7 blocked by black's own pawn) — used for the mid-line mate test.
+
+LINE_FEN = "7k/p6p/8/8/8/1Q6/8/6RK w - - 0 1"
+LINE_SAN = "Qb4 a6 Qc4 a5 Qd4+"
+
+
+async def _seed_line_puzzle(db_sessionmaker) -> int:
+    from datetime import UTC, datetime
+
+    from app.models import Game, Player, Puzzle
+
+    async with db_sessionmaker() as session:
+        player = Player(username="linetest")
+        session.add(player)
+        await session.flush()
+        game = Game(
+            lichess_id="linetest01",
+            player_id=player.id,
+            player_color="white",
+            player_rating=1500,
+            opponent_name="opp",
+            opponent_rating=1500,
+            speed="blitz",
+            played_at=datetime.now(UTC).replace(tzinfo=None),
+        )
+        session.add(game)
+        await session.flush()
+        puzzle = Puzzle(
+            game_id=game.id,
+            ply=20,
+            fen=LINE_FEN,
+            side_to_move="white",
+            solution_uci="b3b4",
+            solution_san="Qb4",
+            played_uci="b3b1",
+            played_san="Qb1",
+            variation_san=LINE_SAN,
+            win_drop=30.0,
+            eval_before_cp=200,
+            eval_after_cp=-150,
+        )
+        session.add(puzzle)
+        await session.commit()
+        return puzzle.id
+
+
+@pytest.mark.asyncio
+async def test_line_mode_full_line_success(db_sessionmaker, client):
+    puzzle_id = await _seed_line_puzzle(db_sessionmaker)
+
+    first = await client.post(
+        f"/api/puzzles/{puzzle_id}/attempt",
+        json={"move_uci": "b3b4", "mode": "line", "move_index": 0},
+    )
+    assert first.status_code == 200
+    body = first.json()
+    assert body["correct"] is True
+    assert body["line_complete"] is False
+    assert body["opponent_reply_uci"] == "a7a6"
+    assert body["solution_san"] == "Qb4"
+    assert body["variation_san"] == []  # mid-line: future moves must not leak
+
+    second = await client.post(
+        f"/api/puzzles/{puzzle_id}/attempt",
+        json={"move_uci": "b4c4", "mode": "line", "move_index": 2},
+    )
+    body = second.json()
+    assert body["correct"] is True
+    assert body["line_complete"] is False
+    assert body["opponent_reply_uci"] == "a6a5"
+    assert body["solution_san"] == "Qc4"
+    assert body["variation_san"] == []
+
+    third = await client.post(
+        f"/api/puzzles/{puzzle_id}/attempt",
+        json={"move_uci": "c4d4", "mode": "line", "move_index": 4},
+    )
+    body = third.json()
+    assert body["correct"] is True
+    assert body["line_complete"] is True
+    assert body["opponent_reply_uci"] is None
+    assert body["variation_san"] == LINE_SAN.split()
+
+
+@pytest.mark.asyncio
+async def test_line_mode_wrong_move_mid_line_reveals_full_line(db_sessionmaker, client):
+    puzzle_id = await _seed_line_puzzle(db_sessionmaker)
+    resp = await client.post(
+        f"/api/puzzles/{puzzle_id}/attempt",
+        json={"move_uci": "b4b5", "mode": "line", "move_index": 2},
+    )
+    body = resp.json()
+    assert body["correct"] is False
+    assert body["line_complete"] is True
+    # The reveal names the move expected at *this* index, not the line's first move.
+    assert body["solution_san"] == "Qc4"
+    assert body["solution_uci"] == "b4c4"
+    assert body["variation_san"] == LINE_SAN.split()
+
+
+@pytest.mark.asyncio
+async def test_line_mode_give_up_mid_line(db_sessionmaker, client):
+    puzzle_id = await _seed_line_puzzle(db_sessionmaker)
+    resp = await client.post(
+        f"/api/puzzles/{puzzle_id}/attempt",
+        json={"move_uci": None, "mode": "line", "move_index": 2},
+    )
+    body = resp.json()
+    assert body["correct"] is False
+    assert body["line_complete"] is True
+    assert body["variation_san"] == LINE_SAN.split()
+
+
+@pytest.mark.asyncio
+async def test_line_mode_alternate_mate_mid_line_completes(db_sessionmaker, client):
+    puzzle_id = await _seed_line_puzzle(db_sessionmaker)
+    resp = await client.post(
+        f"/api/puzzles/{puzzle_id}/attempt",
+        json={"move_uci": "b4f8", "mode": "line", "move_index": 2},  # Qf8#, not the line move
+    )
+    body = resp.json()
+    assert body["correct"] is True
+    assert body["line_complete"] is True  # stored line no longer applies after a divergent mate
+    assert body["opponent_reply_uci"] is None
+
+
+@pytest.mark.asyncio
+async def test_line_mode_invalid_move_index_rejected(db_sessionmaker, client):
+    puzzle_id = await _seed_line_puzzle(db_sessionmaker)
+
+    past_end = await client.post(
+        f"/api/puzzles/{puzzle_id}/attempt",
+        json={"move_uci": "c4d4", "mode": "line", "move_index": 6},  # only indices 0/2/4 exist
+    )
+    assert past_end.status_code == 422
+    assert past_end.json()["detail"] == "invalid_move_index"
+
+    odd_index = await client.post(
+        f"/api/puzzles/{puzzle_id}/attempt",
+        json={"move_uci": "a7a6", "mode": "line", "move_index": 1},  # opponent move, not attemptable
+    )
+    assert odd_index.status_code == 422
+
+    single_mode_positional = await client.post(
+        f"/api/puzzles/{puzzle_id}/attempt",
+        json={"move_uci": "b4c4", "move_index": 2},  # move_index > 0 requires line mode
+    )
+    assert single_mode_positional.status_code == 422
+
+    beyond_schema_cap = await client.post(
+        f"/api/puzzles/{puzzle_id}/attempt",
+        json={"move_uci": "c4d4", "mode": "line", "move_index": 9},  # le=8 schema bound
+    )
+    assert beyond_schema_cap.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_single_move_requests_unchanged_regression(db_sessionmaker, client):
+    # Phase 1 clients send only move_uci; every pre-existing field must behave
+    # exactly as before, with the new fields at their inert defaults.
+    puzzle_id = await _seed_line_puzzle(db_sessionmaker)
+    resp = await client.post(f"/api/puzzles/{puzzle_id}/attempt", json={"move_uci": "b3b4"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["correct"] is True
+    assert body["solution_uci"] == "b3b4"
+    assert body["solution_san"] == "Qb4"
+    assert body["played_san"] == "Qb1"
+    assert body["variation_san"] == LINE_SAN.split()  # full line, exactly as Phase 1
+    assert body["opponent_reply_uci"] is None
+    assert body["line_complete"] is True

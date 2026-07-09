@@ -8,7 +8,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.analysis import determine_player_color, extract_puzzles, move_delivers_checkmate, preset_for_rating
+from app.analysis import (
+    determine_player_color,
+    extract_puzzles,
+    move_delivers_checkmate,
+    mover_moves_in_line,
+    preset_for_rating,
+    variation_board,
+    variation_move_uci,
+)
 from app.config import settings
 from app.database import get_db
 from app.lichess import LichessRateLimited, LichessUserNotFound, fetch_games
@@ -180,6 +188,7 @@ async def get_player_puzzles(
                     speed=game.speed,
                     played_at=game.played_at,
                     win_drop=puzzle.win_drop,
+                    mover_moves_in_line=mover_moves_in_line(puzzle.variation_san.split()),
                 )
             )
 
@@ -196,7 +205,7 @@ async def get_player_puzzles(
 
 
 @router.post("/api/puzzles/{puzzle_id}/attempt", response_model=AttemptResponse)
-@limiter.limit("60/minute")
+@limiter.limit("120/minute")  # line mode sends up to 3 attempts per puzzle
 async def attempt_puzzle(
     request: Request,
     response: Response,
@@ -208,20 +217,57 @@ async def attempt_puzzle(
     if puzzle is None:
         raise HTTPException(status_code=404, detail="puzzle_not_found")
 
+    line = puzzle.variation_san.split() if puzzle.variation_san else []
+    total_mover_moves = mover_moves_in_line(line)
+    line_mode = body.mode == "line"
+
+    if body.move_index == 0:
+        board = chess.Board(puzzle.fen)
+        # The line's first move should equal `best`, but the stored solution is
+        # authoritative (§2.1).
+        expected_uci = puzzle.solution_uci
+        expected_san = puzzle.solution_san
+    else:
+        # Mover moves live at even line indices (0, 2, 4); anything else, an
+        # index past the required window, or an unreplayable line is a client error.
+        if not line_mode or body.move_index % 2 == 1 or body.move_index >= 2 * total_mover_moves:
+            raise HTTPException(status_code=422, detail="invalid_move_index")
+        board = variation_board(puzzle.fen, line, body.move_index)
+        expected_uci = variation_move_uci(puzzle.fen, line, body.move_index)
+        if board is None or expected_uci is None:
+            raise HTTPException(status_code=422, detail="invalid_move_index")
+        expected_san = line[body.move_index]
+
     correct = False
+    alternate_mate = False
     if body.move_uci is not None:
-        if body.move_uci == puzzle.solution_uci:
+        if body.move_uci == expected_uci:
             correct = True
-        else:
-            board = chess.Board(puzzle.fen)
-            correct = move_delivers_checkmate(board, body.move_uci)
+        elif move_delivers_checkmate(board, body.move_uci):
+            # A mate is never wrong (§6.5) — but it diverges from the stored
+            # line, so the line ends here even mid-way through.
+            correct = True
+            alternate_mate = True
+
+    line_complete = True
+    opponent_reply_uci = None
+    if line_mode and correct and not alternate_mate:
+        next_mover_index = body.move_index + 2
+        if next_mover_index < 2 * total_mover_moves:
+            reply = variation_move_uci(puzzle.fen, line, body.move_index + 1)
+            if reply is not None:
+                opponent_reply_uci = reply
+                line_complete = False
 
     return AttemptResponse(
         correct=correct,
-        solution_uci=puzzle.solution_uci,
-        solution_san=puzzle.solution_san,
+        solution_uci=expected_uci,
+        solution_san=expected_san,
         played_san=puzzle.played_san,
         win_drop=puzzle.win_drop,
-        variation_san=puzzle.variation_san.split() if puzzle.variation_san else [],
-        opponent_reply_uci=None,
+        # Mid-line responses omit the line so moves 2-3 aren't spoiled (§2.1);
+        # the full line is revealed only once the attempt sequence is over.
+        variation_san=line if line_complete else [],
+        opponent_reply_uci=opponent_reply_uci,
+        line_complete=line_complete,
     )
