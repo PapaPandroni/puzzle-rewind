@@ -9,7 +9,9 @@ export const state = {
   preset: "auto",
   threshold: null,
   mode: "single", // "single" | "line" (multi-move, §13.1)
+  period: "last20", // last20 | day | week | month | year | all (§13.2)
   puzzles: [],
+  gamesScanned: 0,
   index: 0,
   solvedFirstTry: 0, // in line mode: whole lines found without a miss
   lineIndex: 0, // line index (0, 2, 4) of the move currently being sought

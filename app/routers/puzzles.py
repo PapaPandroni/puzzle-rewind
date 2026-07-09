@@ -28,12 +28,35 @@ router = APIRouter()
 
 UsernamePath = Annotated[str, Path(pattern=r"^[a-zA-Z0-9_-]{2,30}$")]
 Preset = Literal["auto", "beginner", "intermediate", "advanced", "expert", "custom"]
+Period = Literal["last20", "day", "week", "month", "year", "all"]
+
+_PERIOD_LENGTHS: dict[str, timedelta] = {
+    "day": timedelta(days=1),
+    "week": timedelta(weeks=1),
+    "month": timedelta(days=30),
+    "year": timedelta(days=365),
+}
 
 
 def _utcnow() -> datetime:
     # Stored naive (UTC by convention) — SQLite silently drops tzinfo on read, so
     # comparisons must stay naive on both sides regardless of backend.
     return datetime.now(UTC).replace(tzinfo=None)
+
+
+def _period_start(period: Period) -> datetime | None:
+    """Start of the requested window; None for last20 (whole accumulated pool)."""
+    if period == "last20":
+        return None
+    if period == "all":
+        return datetime(1970, 1, 1)
+    return _utcnow() - _PERIOD_LENGTHS[period]
+
+
+def _period_cap(period: Period) -> int:
+    if period in ("year", "all"):
+        return settings.max_games_period_long
+    return settings.max_games_period_short
 
 
 def _game_url(game: Game, ply: int) -> str:
@@ -187,6 +210,7 @@ async def get_player_puzzles(
     db: Annotated[AsyncSession, Depends(get_db)],
     threshold: Annotated[int | None, Query(ge=10, le=40)] = None,
     preset: Preset = "auto",
+    period: Period = "last20",
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
 ):
     username = username.lower()
@@ -201,27 +225,47 @@ async def get_player_puzzles(
         _utcnow() - player.last_fetched_at < timedelta(seconds=settings.cache_ttl_seconds)
     )
 
+    period_start = _period_start(period)
+    # Backward fill is gated on coverage, not TTL: it runs whenever the window
+    # reaches further back than anything fetched so far (§13.2).
+    needs_backfill = period_start is not None and (
+        player.history_fetched_until is None or period_start < player.history_fetched_until
+    )
+
     reason: str | None = None
-    if not cache_is_fresh:
+    if not cache_is_fresh or needs_backfill:
         try:
-            reason = await _sync_player_games(db, player, username)
+            reason = await _sync_player_games(
+                db,
+                player,
+                username,
+                forward=not cache_is_fresh,
+                backfill_start=period_start if needs_backfill else None,
+                backfill_cap=_period_cap(period),
+            )
         except LichessUserNotFound:
             raise HTTPException(status_code=404, detail="lichess_user_not_found") from None
         except LichessRateLimited:
             raise HTTPException(status_code=503, detail="lichess_rate_limited") from None
 
-    games_result = await db.scalars(
-        select(Game).where(Game.player_id == player.id).options(selectinload(Game.puzzles))
-    )
+    games_query = select(Game).where(Game.player_id == player.id).options(selectinload(Game.puzzles))
+    if period_start is not None:
+        games_query = games_query.where(Game.played_at >= period_start)
+    games_result = await db.scalars(games_query)
     games = games_result.all()
 
     if not games:
+        if reason is None:
+            has_any = await db.scalar(
+                select(Game.id).where(Game.player_id == player.id).limit(1)
+            )
+            reason = "no_games_in_period" if has_any is not None else "no_analyzed_games"
         return PuzzleSetResponse(
             username=username,
             player_ratings_seen=[],
             games_scanned=0,
             puzzles=[],
-            reason=reason or "no_analyzed_games",
+            reason=reason,
         )
 
     candidates: list[PuzzleSummary] = []

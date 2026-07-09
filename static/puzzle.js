@@ -25,6 +25,14 @@ function movesToFind(puzzle) {
   return Math.max(1, puzzle.mover_moves_in_line);
 }
 
+const PERIOD_CONTEXT = {
+  day: "from the last day",
+  week: "from the last week",
+  month: "from the last month",
+  year: "from the last year",
+  all: "from all time",
+};
+
 export function renderPuzzle() {
   appEl.innerHTML = "";
   playToken++;
@@ -51,7 +59,11 @@ export function renderPuzzle() {
       <div class="puzzle-actions">
         <button id="give-up-btn" class="link-btn">${lineMode ? "Give up / show the line" : "Give up / show solution"}</button>
       </div>
-      <div class="puzzle-counter">Puzzle ${state.index + 1} of ${state.puzzles.length}</div>
+      <div class="puzzle-counter">Puzzle ${state.index + 1} of ${state.puzzles.length}${
+        PERIOD_CONTEXT[state.period]
+          ? ` &middot; ${PERIOD_CONTEXT[state.period]} (${state.gamesScanned} games)`
+          : ""
+      }</div>
       <p class="thanks-note">Thank you <a href="https://lichess.org" target="_blank" rel="noopener">Lichess</a> for being open source and awesome.</p>
     </div>
   `);

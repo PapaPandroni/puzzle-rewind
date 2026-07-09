@@ -5,6 +5,24 @@ import { renderPuzzle } from "./puzzle.js";
 // Must stay in sync with app/config.py Settings.thresholds.
 const PRESET_THRESHOLDS = { beginner: 25, intermediate: 22, advanced: 20, expert: 18 };
 
+const PERIODS = [
+  ["last20", "Last 20"],
+  ["day", "Day"],
+  ["week", "Week"],
+  ["month", "Month"],
+  ["year", "Year"],
+  ["all", "All time"],
+];
+
+const LOADING_COPY = {
+  last20: "Fetching games from Lichess&hellip; this can take a few seconds.",
+  day: "Scanning the last day of games&hellip; this can take a few seconds.",
+  week: "Scanning the last week of games&hellip; this can take a little while.",
+  month: "Scanning the last month of games&hellip; this can take a little while.",
+  year: "Scanning up to a year of games&hellip; this can take up to half a minute.",
+  all: "Scanning their whole game history&hellip; this can take up to half a minute.",
+};
+
 export function goToSearch() {
   state.puzzles = [];
   state.error = null;
@@ -25,6 +43,13 @@ export function renderSearch() {
           <button type="button" class="preset-btn${state.mode === "line" ? " active" : ""}" data-mode="line">Full line</button>
         </div>
         <p class="hint">Single move: find the one best move. Full line: follow the engine's refutation for up to 3 of your moves.</p>
+        <div class="preset-row period-row">
+          ${PERIODS.map(
+            ([value, label]) =>
+              `<button type="button" class="preset-btn${state.period === value ? " active" : ""}" data-period="${value}">${label}</button>`
+          ).join("")}
+        </div>
+        <p class="hint">How far back to mine games for puzzles. Results are cached, so repeat searches are instant.</p>
         <div class="preset-row">
           ${presets
             .map((p) => {
@@ -46,7 +71,7 @@ export function renderSearch() {
         </div>
         <button type="submit" class="search-btn">Find puzzles</button>
       </form>
-      ${state.loading ? `<p class="status">Fetching games from Lichess&hellip; this can take a few seconds.</p>` : ""}
+      ${state.loading ? `<p class="status">${LOADING_COPY[state.period]}</p>` : ""}
       ${state.error ? `<p class="error">${state.error}</p>` : ""}
     </div>
   `);
@@ -56,6 +81,13 @@ export function renderSearch() {
   wrap.querySelectorAll(".mode-row .preset-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       state.mode = btn.dataset.mode;
+      renderSearch();
+    });
+  });
+
+  wrap.querySelectorAll(".period-row .preset-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.period = btn.dataset.period;
       renderSearch();
     });
   });
@@ -90,19 +122,24 @@ async function search(username) {
   state.error = null;
   renderSearch();
   try {
-    const params = new URLSearchParams({ preset: state.preset, limit: "50" });
+    const params = new URLSearchParams({ preset: state.preset, period: state.period, limit: "50" });
     if (state.threshold != null) params.set("threshold", String(state.threshold));
     const data = await api(`/api/players/${encodeURIComponent(username)}/puzzles?${params}`);
     state.loading = false;
     if (data.puzzles.length === 0) {
-      state.error =
-        data.reason === "no_analyzed_games"
-          ? "No analyzed games found for this player yet. Puzzles come from games Lichess has computer-analyzed — analyze some games on Lichess first, then come back."
-          : "No puzzles found for this player at the current difficulty. Try a lower threshold.";
+      if (data.reason === "no_analyzed_games") {
+        state.error =
+          "No analyzed games found for this player yet. Puzzles come from games Lichess has computer-analyzed — analyze some games on Lichess first, then come back.";
+      } else if (data.reason === "no_games_in_period") {
+        state.error = "No analyzed games found in this period — try a longer one.";
+      } else {
+        state.error = "No puzzles found for this player at the current difficulty. Try a lower threshold.";
+      }
       renderSearch();
       return;
     }
     state.puzzles = data.puzzles;
+    state.gamesScanned = data.games_scanned;
     state.index = 0;
     state.solvedFirstTry = 0;
     renderPuzzle();

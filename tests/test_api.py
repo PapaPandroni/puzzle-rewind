@@ -416,6 +416,110 @@ async def test_line_mode_invalid_move_index_rejected(db_sessionmaker, client):
     assert beyond_schema_cap.status_code == 422
 
 
+# --- time periods (§13.2, Phase 2) ---------------------------------------------
+
+
+def _at_days_ago(games: list[dict], assignments: list[tuple[str, int]]) -> list[dict]:
+    """Copies of fixture games re-stamped with fresh ids and createdAt N days ago."""
+    from datetime import UTC, datetime, timedelta
+
+    now = datetime.now(UTC)
+    out = []
+    for game, (new_id, days_ago) in zip(games, assignments):
+        out.append(
+            {**game, "id": new_id, "createdAt": int((now - timedelta(days=days_ago)).timestamp() * 1000)}
+        )
+    return out
+
+
+@pytest.mark.asyncio
+async def test_period_filters_games_by_played_at(client, monkeypatch, peremil_games):
+    games = _at_days_ago(
+        peremil_games,
+        [("recent0001", 5), ("recent0002", 10), ("old0000001", 100), ("old0000002", 200), ("old0000003", 300)],
+    )
+    monkeypatch.setattr("app.routers.puzzles.fetch_games", _make_fake_fetch_games(games))
+
+    month = await client.get(
+        "/api/players/peremil/puzzles",
+        params={"preset": "custom", "threshold": 10, "period": "month"},
+    )
+    assert month.status_code == 200
+    assert month.json()["games_scanned"] == 2  # only the two recent games
+
+    year = await client.get(
+        "/api/players/peremil/puzzles",
+        params={"preset": "custom", "threshold": 10, "period": "year"},
+    )
+    assert year.json()["games_scanned"] == 5
+
+    default = await client.get(
+        "/api/players/peremil/puzzles", params={"preset": "custom", "threshold": 10}
+    )
+    # last20 (the default) serves the whole accumulated pool, exactly as Phase 1.
+    assert default.json()["games_scanned"] == 5
+
+
+@pytest.mark.asyncio
+async def test_period_with_no_games_in_window_returns_reason(client, monkeypatch, peremil_games):
+    games = _at_days_ago(peremil_games[:2], [("old0000001", 100), ("old0000002", 200)])
+    monkeypatch.setattr("app.routers.puzzles.fetch_games", _make_fake_fetch_games(games))
+
+    resp = await client.get(
+        "/api/players/peremil/puzzles",
+        params={"preset": "custom", "threshold": 10, "period": "day"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["puzzles"] == []
+    assert body["reason"] == "no_games_in_period"
+
+
+@pytest.mark.asyncio
+async def test_period_backfill_fetches_once_then_serves_from_coverage(
+    client, monkeypatch, peremil_games
+):
+    games = _at_days_ago(peremil_games[:2], [("recent0001", 5), ("recent0002", 10)])
+    calls: list[dict] = []
+
+    async def counting_fake(username, *, max_games=20, since=None, until=None, timeout=30.0):
+        calls.append({"max_games": max_games, "since": since, "until": until, "timeout": timeout})
+        for g in games:
+            yield g
+
+    monkeypatch.setattr("app.routers.puzzles.fetch_games", counting_fake)
+
+    # Initial default search: forward fill only.
+    await client.get("/api/players/peremil/puzzles", params={"preset": "custom", "threshold": 10})
+    assert len(calls) == 1
+    assert calls[0]["until"] is None
+
+    # Year request on a fresh TTL: no forward fetch, one backward fill bounded
+    # by the oldest stored game, at the long-period cap and timeout.
+    year1 = await client.get(
+        "/api/players/peremil/puzzles",
+        params={"preset": "custom", "threshold": 10, "period": "year"},
+    )
+    assert year1.status_code == 200
+    assert len(calls) == 2
+    assert calls[1]["until"] is not None
+    assert calls[1]["max_games"] == 500
+    assert calls[1]["timeout"] == 60.0
+
+    # Second year request: coverage now reaches back a year — no upstream fetch.
+    await client.get(
+        "/api/players/peremil/puzzles",
+        params={"preset": "custom", "threshold": 10, "period": "year"},
+    )
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_invalid_period_returns_422(client):
+    resp = await client.get("/api/players/peremil/puzzles", params={"period": "decade"})
+    assert resp.status_code == 422
+
+
 @pytest.mark.asyncio
 async def test_single_move_requests_unchanged_regression(db_sessionmaker, client):
     # Phase 1 clients send only move_uci; every pre-existing field must behave
