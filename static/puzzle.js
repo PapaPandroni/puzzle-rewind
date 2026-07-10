@@ -1,7 +1,7 @@
 import { Chessground } from "https://cdn.jsdelivr.net/npm/chessground@9.2.1/+esm";
 import { Chess, SQUARES } from "https://cdn.jsdelivr.net/npm/chess.js@1.4.0/+esm";
 import { api } from "./api.js";
-import { appEl, el, renderFooter, state } from "./app.js";
+import { appEl, el, state } from "./app.js";
 import { goToSearch } from "./search.js";
 
 // The true current position (puzzle FEN + confirmed line moves). Chessground is
@@ -68,7 +68,6 @@ export function renderPuzzle() {
     </div>
   `);
   appEl.appendChild(wrap);
-  appEl.appendChild(renderFooter());
 
   wrap.querySelector("#new-search-btn").addEventListener("click", goToSearch);
 
@@ -303,6 +302,5 @@ function renderSummary() {
     </div>
   `);
   appEl.appendChild(wrap);
-  appEl.appendChild(renderFooter());
   wrap.querySelector("#search-again-btn").addEventListener("click", goToSearch);
 }

@@ -28,12 +28,4 @@ export function el(html) {
   return t.content.firstElementChild;
 }
 
-export function renderFooter() {
-  return el(`
-    <footer class="app-footer">
-      <a href="https://github.com/PapaPandroni/puzzle-rewind" target="_blank" rel="noopener" class="link-btn">About</a>
-    </footer>
-  `);
-}
-
 renderSearch();

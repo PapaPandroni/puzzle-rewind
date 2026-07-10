@@ -1,5 +1,5 @@
 import { api } from "./api.js";
-import { appEl, el, renderFooter, state } from "./app.js";
+import { appEl, el, state } from "./app.js";
 import { renderPuzzle } from "./puzzle.js";
 
 // Must stay in sync with app/config.py Settings.thresholds.
@@ -38,8 +38,6 @@ export function renderSearch() {
   const dis = state.loading ? "disabled" : "";
   const wrap = el(`
     <div class="search-screen">
-      <h1>Puzzle Rewind</h1>
-      <p class="tagline">Turn your own Lichess games into an endless puzzle stream.</p>
       <form id="search-form" class="search-form">
         <input id="username-input" type="text" placeholder="Lichess username" autocomplete="off" ${dis} />
         <div class="preset-row mode-row">
@@ -89,7 +87,6 @@ export function renderSearch() {
     </div>
   `);
   appEl.appendChild(wrap);
-  appEl.appendChild(renderFooter());
 
   // Set the value via the DOM property (not template interpolation) so quotes
   // in the field can't break the attribute, and live-sync it into state so

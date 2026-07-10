@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -31,6 +32,21 @@ app = FastAPI(title="Puzzle Rewind", lifespan=lifespan, docs_url=None, redoc_url
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+CANONICAL_HOST = "www.puzzle-rewind.eu"
+
+
+@app.middleware("http")
+async def redirect_to_canonical_host(request: Request, call_next):
+    if request.url.path == "/healthz":
+        return await call_next(request)
+    host = request.headers.get("host", "").split(":")[0].lower()
+    if host.endswith(".railway.app") or host == "puzzle-rewind.eu":
+        url = request.url.replace(scheme="https", netloc=CANONICAL_HOST)
+        return RedirectResponse(str(url), status_code=301)
+    return await call_next(request)
+
+
 app.add_middleware(SlowAPIMiddleware)
 
 

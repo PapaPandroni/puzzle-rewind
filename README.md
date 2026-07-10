@@ -4,7 +4,7 @@ Turn *your own* Lichess games into an endless puzzle stream. Enter any Lichess u
 
 No accounts, no login, no server-side session state — puzzle sessions are entirely stateless.
 
-**Live at:** https://puzzle-rewind-production.up.railway.app/
+**Live at:** https://www.puzzle-rewind.eu
 
 ## Features (current — Phase 1 MVP + post-MVP hardening + Phase 2 Depth)
 

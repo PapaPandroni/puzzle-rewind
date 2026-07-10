@@ -3,14 +3,133 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Puzzle Rewind</title>
+<title>Puzzle Rewind — Chess Puzzles from Your Own Lichess Games</title>
+<meta name="description" content="Turn your Lichess blunders into an endless puzzle stream. Enter any Lichess username and train on mistakes from your own real games. Free, no account needed." />
+<link rel="canonical" href="https://www.puzzle-rewind.eu/" />
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+
+<!-- Open Graph -->
+<meta property="og:site_name" content="Puzzle Rewind" />
+<meta property="og:title" content="Puzzle Rewind — Chess Puzzles from Your Own Games" />
+<meta property="og:description" content="Enter a Lichess username, get puzzles mined from that player's real blunders. Free, no signup." />
+<meta property="og:url" content="https://www.puzzle-rewind.eu/" />
+<meta property="og:type" content="website" />
+<meta property="og:image" content="https://www.puzzle-rewind.eu/og-image.png" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+
+<!-- Twitter -->
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Puzzle Rewind — Chess Puzzles from Your Own Games" />
+<meta name="twitter:description" content="Enter a Lichess username, get puzzles mined from that player's real blunders." />
+<meta name="twitter:image" content="https://www.puzzle-rewind.eu/og-image.png" />
+
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/chessground@9.2.1/assets/chessground.base.css" />
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/chessground@9.2.1/assets/chessground.brown.css" />
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/chessground@9.2.1/assets/chessground.cburnett.css" />
 <link rel="stylesheet" href="/style.css" />
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "WebApplication",
+      "name": "Puzzle Rewind",
+      "url": "https://www.puzzle-rewind.eu/",
+      "description": "Turn your Lichess blunders into an endless puzzle stream. Enter any Lichess username and train on mistakes from your own real games.",
+      "applicationCategory": "GameApplication",
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "USD"
+      }
+    },
+    {
+      "@type": "FAQPage",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "Do I need an account?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "No. Enter any public Lichess username and start solving. Nothing is stored about you."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Which games are used?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Your recent Lichess games are analyzed for moves that caused a large drop in your win probability. Each blunder becomes a puzzle: find the move you should have played."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Why don't I see puzzles from all my games?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Right now Puzzle Rewind only looks at games Lichess has already run its own computer analysis on — that's how blunders get detected today. Server-side analysis, so every game works whether or not Lichess has analyzed it, is a planned upcoming feature."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Is it free?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Yes, completely free and open source."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Does it work for any Lichess player?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Yes — you can enter any public username, including your friends' (or your rivals')."
+          }
+        }
+      ]
+    }
+  ]
+}
+</script>
 </head>
 <body>
+<header class="site-header">
+  <h1>Puzzle Rewind</h1>
+  <p class="tagline">Turn your own Lichess games into an endless puzzle stream.</p>
+</header>
 <div id="app"></div>
+<section class="about" id="about">
+  <h2>What is Puzzle Rewind?</h2>
+  <p>Puzzle Rewind mines a Lichess player's game history for blunders and turns
+  them into an interactive puzzle stream. Instead of solving puzzles from strangers'
+  games, you train on the exact mistakes you made yourself — the fastest way to stop
+  repeating them.</p>
+
+  <h2>FAQ</h2>
+  <h3>Do I need an account?</h3>
+  <p>No. Enter any public Lichess username and start solving. Nothing is stored
+  about you.</p>
+  <h3>Which games are used?</h3>
+  <p>Your recent Lichess games are analyzed for moves that caused a large drop in
+  your win probability. Each blunder becomes a puzzle: find the move you should have
+  played.</p>
+  <h3>Why don't I see puzzles from all my games?</h3>
+  <p>Right now Puzzle Rewind only looks at games Lichess has already run its own
+  computer analysis on — that's how blunders get detected today. Server-side
+  analysis, so every game works whether or not Lichess has analyzed it, is a planned
+  upcoming feature.</p>
+  <h3>Is it free?</h3>
+  <p>Yes, completely free and open source.</p>
+  <h3>Does it work for any Lichess player?</h3>
+  <p>Yes — you can enter any public username, including your friends' (or your
+  rivals').</p>
+</section>
+<footer class="site-footer">
+  <p>Open source on <a href="https://github.com/PapaPandroni/puzzle-rewind">GitHub</a>.
+  Not affiliated with Lichess.</p>
+</footer>
 <script type="module" src="/app.js"></script>
 <script data-name="BMC-Widget" data-cfasync="false" src="https://cdnjs.buymeacoffee.com/1.0.0/widget.prod.min.js" data-id="papapandroni" data-description="Support me on Buy me a coffee!" data-message="Was this tool helpful? Please consider buy me a coffee!" data-color="#FF5F5F" data-position="Right" data-x_margin="18" data-y_margin="18"></script>
 </body>
