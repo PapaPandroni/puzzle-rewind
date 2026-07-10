@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     max_games_period_long: int = 500  # year / all time
     period_fetch_timeout_seconds: float = 60.0
 
+    # Forward-fill pagination (§13.2 contiguity): when the forward top-up returns
+    # a full page, continuation pages (sized max_games_period_short) chase the gap
+    # down to the newest stored game; this caps how many we request per sync.
+    forward_fill_max_pages: int = 3
+
     # TUNING: preset win%-drop thresholds. Calibrated per DESIGN.md §6.3/§15 step 8
     # against real accounts (halilegebaylam, denisborisovv, peremil, biku008,
     # profile15, lance5500, zhigalko_sergei) so a ~20-24-game fetch yields roughly

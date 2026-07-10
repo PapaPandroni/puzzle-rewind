@@ -89,6 +89,128 @@ async def test_forward_only_sync_never_sends_until(db_sessionmaker, monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_forward_cap_hit_paginates_until_reconnected(db_sessionmaker, monkeypatch):
+    # 20 games fill page 1; one older game hides below them, above the stored
+    # anchor — the continuation page must fetch it so the pool stays contiguous.
+    anchor_at = NOW - timedelta(days=30)
+    page1 = [_game_dict(f"fwdcap{i:04d}", NOW - timedelta(hours=i)) for i in range(20)]
+    page2 = [_game_dict("fwddeep001", NOW - timedelta(days=2))]
+    fake, calls = _capturing_fetch([page1, page2])
+    monkeypatch.setattr("app.routers.puzzles.fetch_games", fake)
+
+    async with db_sessionmaker() as db:
+        player = await _seed_player(db, [("oldgame001", anchor_at)])
+        await _sync_player_games(db, player, "syncuser")
+
+        assert len(calls) == 2
+        assert calls[0]["max_games"] == 20
+        assert calls[0]["until"] is None
+        # Continuation: same since, bounded above by the oldest game received,
+        # at the period page size and timeout.
+        assert calls[1]["since"] == _to_epoch_ms(anchor_at)
+        assert calls[1]["until"] == _to_epoch_ms(NOW - timedelta(hours=19))
+        assert calls[1]["max_games"] == 300
+        assert calls[1]["timeout"] == 60.0
+        # Second page came in under its cap → gap closed, no honesty fallback.
+        assert player.history_fetched_until is None
+        ids = set((await db.scalars(select(Game.lichess_id))).all())
+        assert "fwddeep001" in ids
+        assert len(ids) == 22  # anchor + 20 + 1, nothing lost
+
+
+@pytest.mark.asyncio
+async def test_forward_full_page_without_since_does_not_paginate(db_sessionmaker, monkeypatch):
+    # Fresh player: a full first page is just the initial last-N window, not a
+    # gap — pagination must not chase the player's whole history.
+    page1 = [_game_dict(f"fresh{i:05d}", NOW - timedelta(hours=i)) for i in range(20)]
+    fake, calls = _capturing_fetch([page1, []])
+    monkeypatch.setattr("app.routers.puzzles.fetch_games", fake)
+
+    async with db_sessionmaker() as db:
+        player = await _seed_player(db, [])
+        await _sync_player_games(db, player, "syncuser")
+
+        assert len(calls) == 1
+        assert player.history_fetched_until is None
+
+
+@pytest.mark.asyncio
+async def test_forward_budget_exhaustion_moves_watermark_forward(db_sessionmaker, monkeypatch):
+    # Every page arrives full through the whole budget → a residual hole may
+    # remain, so the watermark must move *forward* to the oldest game received,
+    # voiding the stale year-old claim (the one exception to never-shrink).
+    monkeypatch.setattr("app.routers.puzzles.settings.max_games_mvp", 2)
+    monkeypatch.setattr("app.routers.puzzles.settings.max_games_period_short", 2)
+    monkeypatch.setattr("app.routers.puzzles.settings.forward_fill_max_pages", 2)
+
+    anchor_at = NOW - timedelta(days=30)
+    pages = [
+        [_game_dict("fullp1a", NOW), _game_dict("fullp1b", NOW - timedelta(days=1))],
+        [_game_dict("fullp2a", NOW - timedelta(days=2)), _game_dict("fullp2b", NOW - timedelta(days=3))],
+        [_game_dict("fullp3a", NOW - timedelta(days=4)), _game_dict("fullp3b", NOW - timedelta(days=5))],
+    ]
+    fake, calls = _capturing_fetch(pages)
+    monkeypatch.setattr("app.routers.puzzles.fetch_games", fake)
+
+    async with db_sessionmaker() as db:
+        player = await _seed_player(db, [("oldgame001", anchor_at)])
+        player.history_fetched_until = NOW - timedelta(days=365)
+        await _sync_player_games(db, player, "syncuser")
+
+        assert len(calls) == 3  # page 1 + 2 continuation pages (budget)
+        assert player.history_fetched_until == NOW - timedelta(days=5)
+
+
+@pytest.mark.asyncio
+async def test_forward_stalled_progress_breaks_and_falls_back(db_sessionmaker, monkeypatch):
+    # A full continuation page whose oldest game equals its own `until` bound
+    # can't shrink the window further — the loop must brake, not spin, and the
+    # honesty fallback must claim only down to what arrived.
+    monkeypatch.setattr("app.routers.puzzles.settings.max_games_mvp", 2)
+    monkeypatch.setattr("app.routers.puzzles.settings.max_games_period_short", 2)
+
+    anchor_at = NOW - timedelta(days=30)
+    pile_up_at = NOW - timedelta(days=1)
+    pages = [
+        [_game_dict("stallp1a", NOW), _game_dict("stallp1b", pile_up_at)],
+        [_game_dict("stallp2a", pile_up_at), _game_dict("stallp2b", pile_up_at)],
+    ]
+    fake, calls = _capturing_fetch(pages)
+    monkeypatch.setattr("app.routers.puzzles.fetch_games", fake)
+
+    async with db_sessionmaker() as db:
+        player = await _seed_player(db, [("oldgame001", anchor_at)])
+        await _sync_player_games(db, player, "syncuser")
+
+        assert len(calls) == 2  # would-be third page has until == previous until
+        assert player.history_fetched_until == pile_up_at
+
+
+@pytest.mark.asyncio
+async def test_backfill_until_prefers_watermark_over_oldest_stored(db_sessionmaker, monkeypatch):
+    # Post-fallback state: watermark above older stored games (possibly-holey
+    # region). Backfill must bound at the watermark so it re-scans the hole.
+    watermark = NOW - timedelta(days=2)
+    fake, calls = _capturing_fetch([[]])
+    monkeypatch.setattr("app.routers.puzzles.fetch_games", fake)
+
+    async with db_sessionmaker() as db:
+        player = await _seed_player(db, [("oldgame001", NOW - timedelta(days=10))])
+        player.history_fetched_until = watermark
+        await _sync_player_games(
+            db,
+            player,
+            "syncuser",
+            forward=False,
+            backfill_start=NOW - timedelta(days=30),
+            backfill_cap=300,
+        )
+
+        assert calls[0]["until"] == _to_epoch_ms(watermark)
+        assert player.history_fetched_until == NOW - timedelta(days=30)
+
+
+@pytest.mark.asyncio
 async def test_backfill_fetches_between_period_start_and_oldest_stored(
     db_sessionmaker, monkeypatch
 ):

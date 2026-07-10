@@ -515,6 +515,79 @@ async def test_period_backfill_fetches_once_then_serves_from_coverage(
 
 
 @pytest.mark.asyncio
+async def test_period_backfill_heals_forward_fill_hole(client, monkeypatch, db_sessionmaker):
+    # State after a forward-fill honesty fallback: the watermark sits above older
+    # stored games with a game missing in between (the hole). A period search
+    # must bound its backfill at the watermark — not the oldest stored game — so
+    # it re-scans through the hole and pulls the missing game in.
+    from datetime import UTC, datetime, timedelta
+
+    from app.models import Game, Player
+    from app.routers.puzzles import _to_epoch_ms
+
+    now = datetime.now(UTC).replace(tzinfo=None)
+    watermark = now - timedelta(days=2)
+
+    def _row(player: Player, lichess_id: str, played_at: datetime) -> Game:
+        return Game(
+            lichess_id=lichess_id,
+            player_id=player.id,
+            player_color="white",
+            player_rating=1500,
+            opponent_name="opp",
+            opponent_rating=1500,
+            speed="blitz",
+            played_at=played_at,
+            raw_analysis_processed=True,
+        )
+
+    async with db_sessionmaker() as session:
+        player = Player(
+            username="healme",
+            last_fetched_at=now,  # fresh TTL: no forward fetch, backfill only
+            history_fetched_until=watermark,  # fallback state: claim starts above the hole
+        )
+        session.add(player)
+        await session.flush()
+        session.add(_row(player, "oldstored01", now - timedelta(days=10)))
+        session.add(_row(player, "newstored01", watermark))
+        await session.commit()
+
+    hole_game = {
+        "id": "holegame01",
+        "variant": "standard",
+        "speed": "blitz",
+        "createdAt": _to_epoch_ms(now - timedelta(days=5)),
+        "players": {
+            "white": {"user": {"id": "healme", "name": "healme"}, "rating": 1500},
+            "black": {"user": {"id": "opp", "name": "opp"}, "rating": 1500},
+        },
+        "moves": "e4 e5",
+        "analysis": [{"eval": 0}, {"eval": 0}],
+    }
+    captured: list[dict] = []
+
+    async def fake_fetch_games(username, *, max_games=20, since=None, until=None, timeout=30.0):
+        captured.append({"since": since, "until": until})
+        yield hole_game
+
+    monkeypatch.setattr("app.routers.puzzles.fetch_games", fake_fetch_games)
+
+    resp = await client.get("/api/players/healme/puzzles", params={"period": "month"})
+    assert resp.status_code == 200
+    assert resp.json()["games_scanned"] == 3  # hole game recovered
+
+    assert len(captured) == 1  # backfill only, no forward fetch
+    assert captured[0]["until"] == _to_epoch_ms(watermark)
+    async with db_sessionmaker() as session:
+        from sqlalchemy import select
+
+        healed = await session.scalar(select(Player).where(Player.username == "healme"))
+        # Coverage honestly extends back to the period start again.
+        assert healed.history_fetched_until < now - timedelta(days=29)
+
+
+@pytest.mark.asyncio
 async def test_invalid_period_returns_422(client):
     resp = await client.get("/api/players/peremil/puzzles", params={"period": "decade"})
     assert resp.status_code == 422

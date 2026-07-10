@@ -119,6 +119,34 @@ async def _persist_game(db: AsyncSession, player: Player, username: str, game: d
     return True
 
 
+async def _stream_and_persist(
+    db: AsyncSession,
+    player: Player,
+    username: str,
+    *,
+    max_games: int,
+    since: int | None,
+    until: int | None,
+    timeout: float = 30.0,
+) -> tuple[int, datetime | None]:
+    """Fetch one export page and persist it: (games received, oldest createdAt seen).
+
+    `oldest_received` is a min over the batch rather than "last yielded" so it
+    doesn't depend on Lichess's newest-first stream order.
+    """
+    received = 0
+    oldest_received: datetime | None = None
+    async for game in fetch_games(
+        username, max_games=max_games, since=since, until=until, timeout=timeout
+    ):
+        received += 1
+        played_at = datetime.fromtimestamp(game["createdAt"] / 1000, tz=UTC).replace(tzinfo=None)
+        if oldest_received is None or played_at < oldest_received:
+            oldest_received = played_at
+        await _persist_game(db, player, username, game)
+    return received, oldest_received
+
+
 async def _sync_player_games(
     db: AsyncSession,
     player: Player,
@@ -133,7 +161,12 @@ async def _sync_player_games(
     Two independent directions: `forward` tops up from the newest stored game
     (TTL-gated by the caller) and `backfill_start` extends the coverage window
     backwards to that point, fetching at most `backfill_cap` games between it
-    and the oldest stored game. `lichess_id` uniqueness makes overlap harmless.
+    and the coverage bottom. `lichess_id` uniqueness makes overlap harmless.
+
+    Contiguity invariant: stored games form one gap-free range from the coverage
+    bottom (`history_fetched_until` if set, else the oldest stored game) up to
+    the newest stored game. The forward branch paginates on a full page to keep
+    the top edge gap-free; the backfill branch only ever extends the bottom edge.
 
     Returns a "reason" string for empty results (no analyzed games / user has
     none), or None. Raises LichessUserNotFound / LichessRateLimited upstream.
@@ -148,9 +181,46 @@ async def _sync_player_games(
         if latest is not None:
             since_ms = _to_epoch_ms(latest)
 
-        async for game in fetch_games(username, max_games=settings.max_games_mvp, since=since_ms):
-            fetched_any = True
-            await _persist_game(db, player, username, game)
+        received, oldest_received = await _stream_and_persist(
+            db, player, username, max_games=settings.max_games_mvp, since=since_ms, until=None
+        )
+        fetched_any = received > 0
+        page_full = received >= settings.max_games_mvp
+
+        # A full page with a `since` bound means games may be hiding between the
+        # newest stored game and the oldest just received. Page downward until
+        # reconnected with stored history — otherwise a hole opens that neither
+        # this branch (always `since = newest stored`) nor the backfill (bounded
+        # by the coverage bottom) would ever revisit. Without `since` (fresh
+        # player) a full page is just the initial last-N window — no gap to chase.
+        pages_left = settings.forward_fill_max_pages
+        until_ms: int | None = None
+        while since_ms is not None and page_full and pages_left > 0 and oldest_received is not None:
+            next_until_ms = _to_epoch_ms(oldest_received)
+            if until_ms is not None and next_until_ms >= until_ms:
+                break  # no strict progress (timestamp pile-up) — bail to the fallback
+            until_ms = next_until_ms
+            pages_left -= 1
+            received, oldest_received = await _stream_and_persist(
+                db,
+                player,
+                username,
+                max_games=settings.max_games_period_short,
+                since=since_ms,
+                until=until_ms,
+                timeout=settings.period_fetch_timeout_seconds,
+            )
+            page_full = received >= settings.max_games_period_short
+
+        if since_ms is not None and page_full and oldest_received is not None:
+            # Pagination stopped (budget/stall) while pages were still arriving
+            # full: a residual hole may remain below what arrived, so any earlier
+            # coverage claim is void. The honest "contiguous back to" point is the
+            # oldest game of this sync — deliberately moving the watermark
+            # *forward*, the one exception to the backfill branch's never-shrink
+            # rule. The next period search re-backfills through the hole (dedup
+            # makes the overlap cheap) and heals it.
+            player.history_fetched_until = oldest_received
 
         player.last_fetched_at = _utcnow()
 
@@ -158,20 +228,23 @@ async def _sync_player_games(
         oldest = await db.scalar(
             select(Game.played_at).where(Game.player_id == player.id).order_by(Game.played_at.asc())
         )
-        received = 0
-        oldest_received: datetime | None = None
-        async for game in fetch_games(
+        # Bound by the watermark, not merely the oldest stored game: after a
+        # forward-fill fallback the watermark sits *above* older stored games
+        # (a possibly-holey region), and the backfill must re-scan through it
+        # rather than skip it. A watermark above the oldest stored game can also
+        # arise hole-free (a sparse initial window reaching below a later period
+        # claim); the schema can't tell the two apart, so we accept a bounded,
+        # deduped overlap refetch there in exchange for guaranteed healing.
+        backfill_until = player.history_fetched_until or oldest
+        received, oldest_received = await _stream_and_persist(
+            db,
+            player,
             username,
             max_games=backfill_cap,
             since=_to_epoch_ms(backfill_start),
-            until=_to_epoch_ms(oldest) if oldest is not None else None,
+            until=_to_epoch_ms(backfill_until) if backfill_until is not None else None,
             timeout=settings.period_fetch_timeout_seconds,
-        ):
-            received += 1
-            played_at = datetime.fromtimestamp(game["createdAt"] / 1000, tz=UTC).replace(tzinfo=None)
-            if oldest_received is None or played_at < oldest_received:
-                oldest_received = played_at
-            await _persist_game(db, player, username, game)
+        )
 
         if received >= backfill_cap and oldest_received is not None:
             # Cap hit: only claim coverage down to what actually arrived, so a
