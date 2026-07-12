@@ -87,6 +87,11 @@ async def test_forward_only_sync_never_sends_until(db_sessionmaker, monkeypatch)
         assert player.history_fetched_until is None
         assert player.last_fetched_at is not None
 
+        # Every persisted game carries its raw movelist since Phase 3.
+        stored = await db.scalar(select(Game).where(Game.lichess_id == "newgame001"))
+        assert stored.moves_san == "e4 e5"
+        assert stored.eval_source == "lichess"
+
 
 @pytest.mark.asyncio
 async def test_forward_cap_hit_paginates_until_reconnected(db_sessionmaker, monkeypatch):

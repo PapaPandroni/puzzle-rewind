@@ -37,6 +37,14 @@ class Settings(BaseSettings):
     engine_idle_quit_seconds: float = 300.0  # lazy lifecycle: quit after idle
     engine_variation_max_plies: int = 12  # cap stored PV length, like Lichess lines
 
+    # TUNING: engine job guardrails (§14.1 cost amendments). The per-search cap
+    # bounds one visitor's ask; the daily fuse bounds worst-case total engine
+    # spend under unbounded traffic (150/day ≈ $2.5/month worst case on Railway
+    # usage pricing — env-tunable without a deploy if the app gets popular).
+    max_engine_games_per_search: int = 40
+    max_engine_games_per_day: int = 150
+    worker_poll_seconds: float = 2.0  # job-claim + engine-idle-quit poll interval
+
     # TUNING: preset win%-drop thresholds. Calibrated per DESIGN.md §6.3/§15 step 8
     # against real accounts (halilegebaylam, denisborisovv, peremil, biku008,
     # profile15, lance5500, zhigalko_sergei) so a ~20-24-game fetch yields roughly

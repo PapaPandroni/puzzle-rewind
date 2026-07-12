@@ -95,6 +95,8 @@ async def _persist_game(db: AsyncSession, player: Player, username: str, game: d
         speed=game["speed"],
         played_at=datetime.fromtimestamp(game["createdAt"] / 1000, tz=UTC).replace(tzinfo=None),
         raw_analysis_processed=True,
+        eval_source="lichess",
+        moves_san=game.get("moves") or None,
     )
     db.add(game_row)
     await db.flush()  # assign game_row.id

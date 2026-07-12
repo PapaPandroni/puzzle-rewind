@@ -5,7 +5,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 
-__all__ = ["Base", "Player", "Game", "Puzzle"]
+__all__ = ["Base", "Player", "Game", "Puzzle", "Job"]
 
 
 class Player(Base):
@@ -34,6 +34,22 @@ class Game(Base):
     speed: Mapped[str] = mapped_column(String(20))
     played_at: Mapped[datetime]
     raw_analysis_processed: Mapped[bool] = mapped_column(default=False)
+    # Eval source hierarchy (§14.3): Lichess analysis when it exists (free,
+    # instant), otherwise the background Stockfish worker.
+    eval_source: Mapped[str] = mapped_column(
+        String(10), default="lichess", server_default="lichess"
+    )  # "lichess" | "stockfish"
+    # Full SAN movelist, stored for every game since Phase 3 (NULL on older
+    # rows). The engine path needs it; keeping it uniformly means future
+    # features never depend on whether Lichess had analyzed a game.
+    moves_san: Mapped[str | None] = mapped_column(Text)
+    # Merged engine analysis (Lichess-shaped JSON), engine-sourced games only —
+    # so future features (brilliance, alternate solutions) reuse the paid-for
+    # CPU work instead of re-analyzing. Lichess analysis is re-fetchable free.
+    analysis_json: Mapped[str | None] = mapped_column(Text)
+    # When the worker finished this game; drives the daily-fuse accounting
+    # (games analyzed since UTC midnight). Naive UTC like the rest.
+    analyzed_at: Mapped[datetime | None]
 
     player: Mapped["Player"] = relationship(back_populates="games")
     puzzles: Mapped[list["Puzzle"]] = relationship(back_populates="game")
@@ -60,3 +76,25 @@ class Puzzle(Base):
     game: Mapped["Game"] = relationship(back_populates="puzzles")
 
     __table_args__ = (UniqueConstraint("game_id", "ply"),)
+
+
+class Job(Base):
+    """One background Stockfish analysis job per player (§14.1).
+
+    No params column: the work set is defined by DB state — the player's
+    unprocessed games (raw_analysis_processed=False), newest first, up to
+    `total`. Puzzles are always stored at min_win_drop_stored, so the user's
+    threshold never matters at analysis time.
+    """
+
+    __tablename__ = "jobs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    player_id: Mapped[int] = mapped_column(ForeignKey("players.id"), index=True)
+    status: Mapped[str] = mapped_column(
+        String(10), default="queued", index=True
+    )  # queued | running | done | failed
+    progress: Mapped[int] = mapped_column(default=0)  # games analyzed so far
+    total: Mapped[int] = mapped_column(default=0)  # games this job will analyze
+    error: Mapped[str | None] = mapped_column(Text)  # machine-readable, e.g. "daily_budget_reached"
+    created_at: Mapped[datetime]
