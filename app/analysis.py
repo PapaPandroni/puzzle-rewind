@@ -86,7 +86,15 @@ def find_blunder_plies(
 
     analysis = game.get("analysis", [])
     moves_san = game.get("moves", "").split()
+    return find_blunder_plies_for_color(analysis, moves_san, color, min_win_drop)
 
+
+def find_blunder_plies_for_color(
+    analysis: list[dict[str, Any]], moves_san: list[str], color: str, min_win_drop: float
+) -> list[tuple[int, float]]:
+    """Color-based core of find_blunder_plies (§14.3): the Stockfish worker holds a
+    Game row (player_color, moves_san) rather than a Lichess game dict, so it can't
+    resolve the color from player ids."""
     results = []
     for ply, entry in enumerate(analysis):
         if ply >= len(moves_san):
@@ -159,6 +167,24 @@ def extract_puzzles(
     return [
         build_puzzle(game, ply, win_drop)
         for ply, win_drop in find_blunder_plies(game, username, min_win_drop)
+    ]
+
+
+def extract_puzzles_for_color(
+    analysis: list[dict[str, Any]], moves_san_str: str, color: str, min_win_drop: float
+) -> list[dict[str, Any]]:
+    """extract_puzzles for a known color and bare analysis/moves (Stockfish path).
+
+    build_puzzle only reads game["analysis"] and game["moves"], so a minimal shim
+    dict keeps it shared verbatim between the Lichess and engine paths.
+    """
+    moves_san = moves_san_str.split()
+    game_shim = {"analysis": analysis, "moves": moves_san_str}
+    return [
+        build_puzzle(game_shim, ply, win_drop)
+        for ply, win_drop in find_blunder_plies_for_color(
+            analysis, moves_san, color, min_win_drop
+        )
     ]
 
 

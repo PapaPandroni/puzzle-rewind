@@ -4,7 +4,10 @@ import pytest
 from app.analysis import (
     build_puzzle,
     determine_player_color,
+    extract_puzzles,
+    extract_puzzles_for_color,
     find_blunder_plies,
+    find_blunder_plies_for_color,
     move_delivers_checkmate,
     mover_moves_in_line,
     preset_for_rating,
@@ -262,3 +265,29 @@ def test_mover_moves_in_line_lengths_and_cap():
         assert mover_moves_in_line(line[:length]) == expected, f"length {length}"
     assert mover_moves_in_line([]) == 0
     assert mover_moves_in_line(line, cap=5) == 4  # ceil(7/2), cap not binding
+
+
+# --- color-based extraction core (Phase 3 worker path) -----------------------
+# The Stockfish worker holds a Game row + engine entries, not a Lichess game
+# dict, so it calls the *_for_color forms directly. They must be exactly
+# equivalent to the username-based wrappers on the same inputs.
+
+
+def test_find_blunder_plies_for_color_matches_wrapper(peremil_games):
+    for game in peremil_games:
+        color = determine_player_color(game, "peremil")
+        assert color is not None
+        assert find_blunder_plies_for_color(
+            game["analysis"], game["moves"].split(), color, min_win_drop=10
+        ) == find_blunder_plies(game, "peremil", min_win_drop=10)
+
+
+def test_extract_puzzles_for_color_matches_wrapper(peremil_games):
+    game = peremil_games[2]  # known to contain blunders (alignment test above)
+    color = determine_player_color(game, "peremil")
+    via_color = extract_puzzles_for_color(
+        game["analysis"], game["moves"], color, min_win_drop=10
+    )
+    via_username = extract_puzzles(game, "peremil", min_win_drop=10)
+    assert via_color, "expected at least one puzzle from the fixture game"
+    assert via_color == via_username
