@@ -23,6 +23,20 @@ class Settings(BaseSettings):
     # down to the newest stored game; this caps how many we request per sync.
     forward_fill_max_pages: int = 3
 
+    # TUNING: self-hosted Stockfish (§14.1, cost amendments 2026-07-10). Limits
+    # are wall-clock, so on usage-billed Railway `engine_movetime` is THE cost
+    # lever and extra threads multiply billed CPU-seconds for the same wall time.
+    # The Docker image sets STOCKFISH_PATH=/usr/games/stockfish (Debian puts the
+    # binary outside PATH on slim images).
+    stockfish_path: str = "stockfish"
+    engine_movetime: float = 0.1  # s/position, cheap detection sweep
+    engine_refine_movetime: float = 0.4  # s/position, re-check of flagged blunder plies
+    engine_depth_cap: int = 18  # Limit(time=..., depth=...): whichever stops first
+    engine_threads: int = 1
+    engine_hash_mb: int = 128
+    engine_idle_quit_seconds: float = 300.0  # lazy lifecycle: quit after idle
+    engine_variation_max_plies: int = 12  # cap stored PV length, like Lichess lines
+
     # TUNING: preset win%-drop thresholds. Calibrated per DESIGN.md §6.3/§15 step 8
     # against real accounts (halilegebaylam, denisborisovv, peremil, biku008,
     # profile15, lance5500, zhigalko_sergei) so a ~20-24-game fetch yields roughly
