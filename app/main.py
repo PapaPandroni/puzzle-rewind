@@ -1,4 +1,5 @@
-from contextlib import asynccontextmanager
+import asyncio
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse
@@ -8,9 +9,11 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from sqlalchemy import inspect
 
-from app.database import engine
+from app.database import async_session, engine
+from app.engine import engine_handle
 from app.rate_limit import limiter
 from app.routers.puzzles import router as puzzles_router
+from app.worker import reset_stale_jobs, worker_loop
 
 
 @asynccontextmanager
@@ -25,7 +28,16 @@ async def lifespan(app: FastAPI):
             "Database schema is not initialized. Run `uv run alembic upgrade head` "
             "before starting the server."
         )
+    # Background Stockfish worker (§14.1) — uses the module-level session
+    # factory, never the request-scoped get_db. Note API tests drive the app
+    # through httpx.ASGITransport, which skips lifespan: no worker runs there.
+    await reset_stale_jobs(async_session)
+    worker_task = asyncio.create_task(worker_loop(async_session))
     yield
+    worker_task.cancel()
+    with suppress(asyncio.CancelledError):
+        await worker_task
+    await engine_handle.quit()
 
 
 app = FastAPI(title="Puzzle Rewind", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)

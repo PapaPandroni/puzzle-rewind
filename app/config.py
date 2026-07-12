@@ -43,6 +43,11 @@ class Settings(BaseSettings):
     # usage pricing — env-tunable without a deploy if the app gets popular).
     max_engine_games_per_search: int = 40
     max_engine_games_per_day: int = 150
+    # Fairness: one searched username can consume at most this share of the
+    # daily budget, so a single keen user can't lock everyone else out until
+    # midnight. Per searched player, not per visitor — a popular player's cap
+    # (and the puzzles it pays for) is shared by everyone searching them.
+    max_engine_games_per_day_per_player: int = 60
     worker_poll_seconds: float = 2.0  # job-claim + engine-idle-quit poll interval
 
     # TUNING: preset win%-drop thresholds. Calibrated per DESIGN.md §6.3/§15 step 8
