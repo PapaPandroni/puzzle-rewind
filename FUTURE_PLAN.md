@@ -251,3 +251,25 @@ Work in this exact order; each step ends with something runnable and its tests p
 
 **Definition of done, Phase 2:** a user can pick "Full line" + "Year", grind multi-move puzzles from a year of games, and repeat searches hit the accumulated cache instantly.
 **Definition of done, Phase 3:** a username with *zero* Lichess-analyzed games still yields puzzles (after a visible analysis job), and a `[Brilliancies]` toggle surfaces rare `kind="brilliant"` puzzles with the "can you find it again?" framing.
+
+---
+
+## 6. Parked features (wanted, but conditional on real usage — do not build preemptively)
+
+Recorded 2026-07-13 so they don't get lost. Each has an explicit trigger; until the trigger fires, building them is premature optimization.
+
+### 6.1 Engine pool (parallel Stockfish workers)
+
+**Trigger:** popularity — pending jobs *regularly* overlap in the wild (the `jobs` table repeatedly shows 2+ non-terminal jobs at once, or users report analysis feeling slow whenever the site has company). A single overlap now and then is already handled acceptably by round-robin.
+
+**What:** run K engine processes (K ≈ 2–3) so concurrent jobs each get full speed instead of sharing one engine round-robin. Sketch: K `EngineHandle` instances; the worker's existing round-robin picker (`pick_job` in `app/worker.py`, lowest-progress-first) generalizes to "top-K pending jobs", dispatched to K slots; per-slot lazy spawn + idle-quit; crash isolation per slot.
+
+**Facts settled when this was parked (don't re-derive):** total cost per game is *identical* (Railway bills vCPU-minutes; parallelism changes speed, not price) — but the daily fuse burns up to K× faster in wall-clock under sustained demand, so consider raising `max_engine_games_per_day` (and likely the Railway plan) in the same change. RAM is a non-issue (~230 MB/engine incl. hash). No cookies/accounts needed — a pool is not "per-user engines", just K job slots. Job-claim locking is still unnecessary while the app runs a single replica; `FOR UPDATE SKIP LOCKED` only enters if replicas ever scale out.
+
+### 6.2 Single "search 20 games" button (period-picker simplification)
+
+**Trigger:** real usage data showing the period picker confuses users or goes unused (e.g. "All time" complaints about not getting *all* games, or analytics/feedback after Phase 3 has been live a while).
+
+**What:** replace the six-way period picker with one button — each press first tops up newer games, then digs ~20 games further back into history. Simpler mental model ("press again for more"), no expectation mismatch on huge histories. The coverage-window machinery already supports it: forward fill as-is plus a bounded backfill (`backfill_cap=20`, no period bound) from the coverage bottom; mostly frontend deletion plus a small endpoint mode.
+
+**Why not now:** periods stopped being a cost risk when the 40-games-per-search engine cap landed (a "Year" search queues at most 40 engine games), and they're live, tested, and useful as a filter over the accumulated pool. Removing them before anyone has used Phase 3 would be optimizing on a guess.
