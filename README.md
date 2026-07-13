@@ -6,9 +6,10 @@ No accounts, no login, no server-side session state — puzzle sessions are enti
 
 **Live at:** https://www.puzzle-rewind.eu
 
-## Features (current — Phase 1 MVP + post-MVP hardening + Phase 2 Depth)
+## Features (current — Phase 1 MVP + post-MVP hardening + Phase 2 Depth + Phase 3 engine pipeline)
 
-- Search any Lichess username; pulls their last 20 analyzed games via the public Lichess API (no auth required).
+- Search any Lichess username; pulls their last 20 games via the public Lichess API (no auth required).
+- **Self-hosted engine analysis** (Phase 3): games Lichess never analyzed are analyzed by our own Stockfish in a background job — a progress banner shows "Analyzing 7/11 games…" while you keep solving, and a [Refresh puzzles] click pulls in the newly mined puzzles. Detection runs as a cheap 0.1s/position sweep with flagged blunders re-checked at 0.4s, so solutions stay sharp. Budgeted at ≤40 games per search, 150/day globally and 60/day per player to keep hosting costs hobby-sized.
 - **Full line mode** (Phase 2): instead of a single move, find up to the first 3 of your moves in the engine's refutation line — the app auto-plays the opponent's replies, and any miss reveals the whole line played out on the board.
 - **Time periods** (Phase 2): mine puzzles from the last day, week, month, year, or all time (capped at 300–500 games per fetch to stay polite toward Lichess). The database accumulates each player's puzzle pool across searches, so repeat and shorter-period searches are instant.
 - Blunder detection based on win-percentage swing (not raw centipawns), so puzzles reflect genuinely bad decisions rather than cosmetic eval noise in already-lost positions.
@@ -21,7 +22,7 @@ No accounts, no login, no server-side session state — puzzle sessions are enti
 
 ## Tech stack
 
-Python 3.14 · uv · FastAPI · SQLAlchemy 2.0 (async) · Alembic · Pydantic v2 · SQLite (dev) / PostgreSQL (prod) · httpx · python-chess · vanilla JS/HTML/CSS · chessground · chess.js · Railway (deployed)
+Python 3.14 · uv · FastAPI · SQLAlchemy 2.0 (async) · Alembic · Pydantic v2 · SQLite (dev) / PostgreSQL (prod) · httpx · python-chess · Stockfish · vanilla JS/HTML/CSS · chessground · chess.js · Railway (deployed)
 
 See [`DESIGN.md`](DESIGN.md) for the full design spec, including corrections and calibration notes discovered during implementation.
 
@@ -32,6 +33,10 @@ Requires [uv](https://docs.astral.sh/uv/) and Python 3.14 (uv will fetch the int
 ```bash
 # Install dependencies
 uv sync
+
+# Optional: Stockfish for background engine analysis (the app runs fine
+# without it — engine jobs fail gracefully and engine tests auto-skip)
+brew install stockfish
 
 # Apply database migrations (creates ./dev.db by default)
 uv run alembic upgrade head
@@ -73,19 +78,14 @@ The image runs migrations on boot and needs no network access at startup beyond 
 
 ## Upcoming features
 
-**Phase 2 — Depth**
-- Multi-move puzzles: play up to 3 moves of the engine's refutation line before the full solution is revealed, with the opponent's replies auto-played.
-- Time-period selection (day / week / month / year / all time) instead of just the last 20 games, with pagination and higher game caps.
-
-**Phase 3 — Self-hosted engine**
-- Local Stockfish analysis for games Lichess hasn't analyzed, unlocking puzzles from a player's *entire* game history rather than just server-analyzed games.
+**Phase 3 — remaining**
 - Brilliant-move detection — surface positions where the player found a strong, non-obvious move, not just their mistakes.
-- Background job queue for engine analysis with live progress in the UI.
+- Accepting near-best alternative solutions on engine-analyzed puzzles (today only the top move — or any checkmate — counts).
 
-Full details, data model, and API design for both phases are in [`DESIGN.md`](DESIGN.md).
+Full details, data model, and API design are in [`DESIGN.md`](DESIGN.md).
 
-## Known MVP limitations
+## Known limitations
 
-- Puzzles only come from games Lichess has already computer-analyzed; casual players with few analyzed games may see few or no puzzles (fixed properly in Phase 3).
+- Games without Lichess analysis are analyzed by our own Stockfish in the background: the first search on a rarely-analyzed account shows a progress banner instead of instant puzzles, and engine work is budgeted (≤40 games per search, 150/day globally, 60/day per player) — big histories fill in across repeat searches and days.
 - Solution checking accepts only the engine's top move (mates are always accepted as correct even if not the top line); other equally good alternatives aren't recognized yet.
 - Difficulty threshold presets are calibrated against a handful of real accounts and will keep drifting as more usage data comes in — see `# TUNING` markers in `app/config.py`.

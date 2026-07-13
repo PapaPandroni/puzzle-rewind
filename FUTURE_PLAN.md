@@ -133,6 +133,8 @@ If multi-move play makes trivial recapture-only puzzles noticeable, add the reca
 
 Two goals: (a) puzzles from games that were **never analyzed** on Lichess — the majority for most users; (b) **brilliant-move** detection. Build only after Phase 2 is deployed and working.
 
+> **Implementation note (2026-07-13, steps 7–9 built on branch `phase-3-engine`):** §3.1 below predates DESIGN §14.1's cost amendments and the decisions made at build time; where they disagree, the implementation (and DESIGN §14.1's dated deltas) is authoritative. The deltas: `engine_movetime` 0.2 → **0.1 s** with a **0.4 s two-pass refinement** of only the flagged blunder plies; **multipv=1** in both passes (brilliance deferred — §3.2's multipv-2 data comes from re-analyzing candidate plies, pre-filtered from the new `games.analysis_json` column, which stores the merged engine output per engine-sourced game); engine lifecycle **lazy** (spawn on job pickup, quit after ~5 idle minutes) instead of alive for the app's lifetime; `Job` keyed by **`player_id`** with no `params` column; budget fuses **150 games/day global + 60/day per player**, enforced in the worker only, accounted via `games.analyzed_at`; `moves_san` stored for **all** new games, not just unanalyzed ones; and `analysed=False` applied **uniformly** to every fetch ("last 20" now means last 20 games *total* — accepted product change; mixing modes would break the §2.2 coverage invariants). Empty-state reasons: `no_analyzed_games` → `no_games`, plus `analysis_pending` when games exist but nothing is solvable yet.
+
 ### 3.1 Engine infrastructure (DESIGN §14.1)
 
 **Dockerfile:** install Stockfish (`apt-get update && apt-get install -y --no-install-recommends stockfish && rm -rf /var/lib/apt/lists/*` on slim works; verify the Debian package version is ≥ SF15 — if too old, download an official static `stockfish-ubuntu-x86-64` binary instead). Re-verify the `docker run --network none` boot check still passes.
@@ -241,9 +243,9 @@ Work in this exact order; each step ends with something runnable and its tests p
 6. [ ] **Deploy + calibrate:** Railway deploy, run Year/All against the §6.3 calibration accounts, sanity-check pool sizes and fetch times; tune caps if needed. *(Pending merge of `phase-2-depth`.)*
 
 ### Phase 3
-7. [ ] **Engine module + Dockerfile:** Stockfish in the image, `app/engine.py` producing Lichess-shaped analysis, `--network none` boot check, engine-marked tests.
-8. [ ] **Jobs + worker:** migration (jobs, `eval_source`, `moves_san`), `app/worker.py` in lifespan, stale-job reset, per-game commits. Worker tests with fake engine.
-9. [ ] **Full-pool fetch flow:** `analysed=False` fetching, unanalyzed games → stored + queued, `job_id` in response, `GET /api/jobs/{id}`, frontend progress banner + refresh. API tests.
+7. [x] **Engine module + Dockerfile:** Stockfish in the image, `app/engine.py` producing Lichess-shaped analysis, `--network none` boot check, engine-marked tests. *(Done 2026-07-13; Debian trixie ships Stockfish 17.1 at `/usr/games/stockfish`, exposed via `STOCKFISH_PATH`.)*
+8. [x] **Jobs + worker:** migration (jobs, `eval_source`, `moves_san`, plus `analysis_json`/`analyzed_at` per the implementation note above), `app/worker.py` in lifespan, stale-job reset, per-game commits. Worker tests with fake engine. *(Done 2026-07-13.)*
+9. [x] **Full-pool fetch flow:** `analysed=False` fetching, unanalyzed games → stored + queued, job inlined in the response, `GET /api/jobs/{id}`, frontend progress banner + refresh. API tests. *(Done 2026-07-13; verified end-to-end locally — real fetch, 11-game engine job, banner lifecycle, fuse drill, offline Docker boot.)*
 10. [ ] **Brilliance:** heuristic + config constants, `kind` filtering end-to-end, alternate-solution acceptance (≤25 cp) for Stockfish puzzles, UI toggle + framing. Pure-function tests.
 11. [ ] **Deploy + tune:** Railway deploy (watch CPU), calibrate brilliance constants against real accounts until brilliancies are rare-but-real; update `DESIGN.md` Status.
 
