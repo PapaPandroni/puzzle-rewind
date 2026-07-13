@@ -68,7 +68,7 @@ SAN→UCI must be converted *at the reconstructed position* (SAN is position-dep
 - Search screen: mode toggle `[Single move] [Full line]` (a second `preset-row`-style segmented control; persists in `state.mode`).
 - Puzzle state gains `lineIndex` (current mover-move number) and a per-puzzle `firstTryClean` flag — `solvedFirstTry` increments only if the *whole line* was found with no misses.
 - `onUserMove` in line mode: POST with `move_index`; on `correct && !line_complete`: play the user's move on the chess.js instance, then after ~300 ms animate `opponent_reply_uci` via `cg.move()` + chess.js `.move()`, re-derive `dests`, unlock board, show progress ("Found it — 1 of 3. Keep going."), `lineIndex += 1` (in line indices: `+2`).
-- On `line_complete` (success, failure, or give-up): reveal — animate the remaining variation moves sequentially (~400 ms apart) from the current position, then show the existing feedback block + [Next puzzle] buttons.
+- On `line_complete` (success, failure, or give-up): reveal — animate the remaining variation moves sequentially (~400 ms apart) from the current position, then show the existing feedback block + [Next puzzle] buttons. *(Refined 2026-07-13: the auto-play reveal was replaced by a user-paced step-through — `‹ Back` / `Forward ›` controls under the board (`mountLineReplay` in `static/puzzle.js`) — because the timed playback felt too fast and gave no control. Opponent-reply auto-play during solving is unchanged.)*
 - Header shows "Find the best line (3 moves)" vs "Find the best move" per mode; use `mover_moves_in_line` for the real count (lines shorter than 3 mover-moves require fewer — DESIGN §13.1).
 
 #### Tests

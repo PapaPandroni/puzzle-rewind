@@ -38,6 +38,9 @@ computing pixel coords from `#board`'s bounding box (8x8 grid; flip files/ranks 
 search screen selectors are `#username-input`, `.search-btn`, `button[data-mode=]`,
 `button[data-period=]`, `button[data-preset=]`; puzzle screen: `.task-line`,
 `#give-up-btn`, `#next-btn`, `.result-correct`, `.result-incorrect`, `.puzzle-counter`.
+In line mode, a miss/give-up/line-completion mounts the step-through solution replay
+in `#replay`: `.replay-controls`, `[data-replay="back"]`, `[data-replay="fwd"]`,
+`.replay-counter` (text `move i of N`) — buttons disable at the line's two ends.
 Intercept the search response with `page.expect_response(lambda r: "/puzzles?" in r.url
 and r.status == 200)` to learn puzzle ids/FENs for scripting moves.
 

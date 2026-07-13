@@ -384,6 +384,21 @@ h2 {
   flex-wrap: wrap;
 }
 
+.replay-controls {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.replay-counter {
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  min-width: 6em;
+  text-align: center;
+}
+
 .link-btn {
   background: none;
   border: none;

@@ -57,6 +57,7 @@ export function renderPuzzle() {
       <div class="task-line">${taskCopy}</div>
       <div class="board-wrap"><div id="board" class="cg-board"></div></div>
       <div id="feedback" class="feedback"></div>
+      <div id="replay" class="replay"></div>
       <div class="puzzle-actions">
         <button id="give-up-btn" class="link-btn">${lineMode ? "Give up / show the line" : "Give up / show solution"}</button>
       </div>
@@ -115,19 +116,49 @@ function syncBoardFromPosition({ unlock }) {
   });
 }
 
-function animateLine(sanMoves, delayMs = 400) {
-  const token = playToken;
-  const step = (i) => {
-    if (token !== playToken || i >= sanMoves.length) return;
-    try {
-      position.move(sanMoves[i]);
-    } catch {
-      return; // defensive: stop rather than desync on a bad SAN
-    }
-    syncBoardFromPosition({ unlock: false });
-    setTimeout(() => step(i + 1), delayMs);
+// Step-through replay of a solution line. Renders on a throwaway Chess instance
+// so it never touches the module-level `position` (the board is display-only
+// here), letting the user scrub the line at their own pace with Back/Forward.
+function mountLineReplay(container, startFen, sanMoves, startPly) {
+  const total = sanMoves.length;
+  let ply = Math.max(0, Math.min(startPly, total));
+
+  const renderAt = (p) => {
+    const chess = new Chess(startFen);
+    for (let i = 0; i < p; i++) chess.move(sanMoves[i]);
+    const last = chess.history({ verbose: true }).at(-1);
+    state.cg.set({
+      fen: chess.fen(),
+      turnColor: chess.turn() === "w" ? "white" : "black",
+      ...(last ? { lastMove: [last.from, last.to] } : {}),
+      movable: { color: undefined },
+    });
   };
-  step(0);
+
+  container.innerHTML = `
+    <div class="replay-controls">
+      <button class="link-btn" data-replay="back">&lsaquo; Back</button>
+      <span class="replay-counter"></span>
+      <button class="link-btn" data-replay="fwd">Forward &rsaquo;</button>
+    </div>
+  `;
+  const backBtn = container.querySelector('[data-replay="back"]');
+  const fwdBtn = container.querySelector('[data-replay="fwd"]');
+  const counter = container.querySelector(".replay-counter");
+
+  const update = () => {
+    renderAt(ply);
+    counter.textContent = `move ${ply} of ${total}`;
+    backBtn.disabled = ply === 0;
+    fwdBtn.disabled = ply === total;
+  };
+  backBtn.addEventListener("click", () => {
+    if (ply > 0) ply--, update();
+  });
+  fwdBtn.addEventListener("click", () => {
+    if (ply < total) ply++, update();
+  });
+  update();
 }
 
 async function onUserMove(orig, dest) {
@@ -238,14 +269,29 @@ function showLineResult(result, moveUci) {
     syncBoardFromPosition({ unlock: false });
     const followedLine = moveUci === result.solution_uci;
     if (followedLine) {
-      // Show how the line continues past the last move the user had to find.
-      animateLine(result.variation_san.slice(state.lineIndex + 1));
+      // Let the user step back through the whole line, or forward past the last
+      // move they had to find to see how it continues.
+      mountLineReplay(
+        document.getElementById("replay"),
+        puzzle.fen,
+        result.variation_san,
+        state.lineIndex + 1,
+      );
       feedbackEl.innerHTML = `
         <p class="result-correct">That's the whole line! In the game you played <strong>${result.played_san}</strong>, dropping your winning chances by ${result.win_drop.toFixed(1)}%.</p>
         ${result.variation_san.length ? `<p class="variation">Line: ${result.variation_san.join(" ")}</p>` : ""}
       `;
     } else {
       // Divergent checkmate: the stored line no longer applies, the board is mate.
+      // Offer the engine's line for review (Back walks it from the start).
+      if (result.variation_san.length) {
+        mountLineReplay(
+          document.getElementById("replay"),
+          puzzle.fen,
+          result.variation_san,
+          result.variation_san.length,
+        );
+      }
       feedbackEl.innerHTML = `
         <p class="result-correct">Checkmate! Not the engine's line, but a mate is never wrong.</p>
         ${result.variation_san.length ? `<p class="variation">Engine line was: ${result.variation_san.join(" ")}</p>` : ""}
@@ -253,11 +299,17 @@ function showLineResult(result, moveUci) {
     }
   } else {
     boardWrap.classList.add("flash-incorrect");
+    const token = playToken;
     const reveal = () => {
-      const remaining = result.variation_san.slice(state.lineIndex);
-      if (remaining.length) {
-        syncBoardFromPosition({ unlock: false }); // clears any wrong move off the board
-        animateLine(remaining);
+      if (token !== playToken) return; // aborted: moved on to the next puzzle
+      if (result.variation_san.length) {
+        // Open on the correct move they missed; Back rewinds, Forward continues.
+        mountLineReplay(
+          document.getElementById("replay"),
+          puzzle.fen,
+          result.variation_san,
+          state.lineIndex + 1,
+        );
       } else {
         applyUci(result.solution_uci);
         syncBoardFromPosition({ unlock: false });
@@ -269,7 +321,7 @@ function showLineResult(result, moveUci) {
       reveal();
     }
     feedbackEl.innerHTML = `
-      <p class="result-incorrect">Best was <strong>${result.solution_san}</strong>. Watch the line play out.</p>
+      <p class="result-incorrect">Best was <strong>${result.solution_san}</strong>. Step through the line below.</p>
       ${result.variation_san.length ? `<p class="variation">Line: ${result.variation_san.join(" ")}</p>` : ""}
       <p class="limitation-note">The answer is the engine's top line — other equally good moves aren't accepted yet.</p>
     `;
