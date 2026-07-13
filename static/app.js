@@ -12,6 +12,7 @@ export const state = {
   period: "last20", // last20 | day | week | month | year | all (§13.2)
   puzzles: [],
   gamesScanned: 0,
+  gamesAnalyzed: 0, // subset of gamesScanned already analyzed (Lichess or engine)
   index: 0,
   solvedFirstTry: 0, // in line mode: whole lines found without a miss
   lineIndex: 0, // line index (0, 2, 4) of the move currently being sought

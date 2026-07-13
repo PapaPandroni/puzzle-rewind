@@ -419,6 +419,7 @@ async def get_player_puzzles(
             username=username,
             player_ratings_seen=[],
             games_scanned=0,
+            games_analyzed=0,
             puzzles=[],
             reason=reason,
             job=job_status,
@@ -452,6 +453,7 @@ async def get_player_puzzles(
         username=username,
         player_ratings_seen=sorted({g.player_rating for g in games}),
         games_scanned=len(games),
+        games_analyzed=sum(1 for g in games if g.raw_analysis_processed),
         puzzles=candidates,
         # Games exist but nothing solvable yet + engine work pending: tell the
         # frontend to show the "analyzing" notice instead of a dead end.

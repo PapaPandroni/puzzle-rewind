@@ -29,12 +29,20 @@ class JobStatus(BaseModel):
     progress: int
     total: int
     error: str | None = None
+    # The tripped budget's limit (games/day), set by the jobs endpoint on
+    # budget failures — limits are env-tunable, so the frontend must never
+    # hardcode them into banner copy.
+    daily_limit: int | None = None
 
 
 class PuzzleSetResponse(BaseModel):
     username: str
     player_ratings_seen: list[int]
     games_scanned: int
+    # How many of games_scanned have been analyzed (Lichess or our engine) —
+    # the honest denominator for "puzzles from N games" copy while a backlog
+    # is still cooking.
+    games_analyzed: int
     puzzles: list[PuzzleSummary]
     reason: str | None = None
     job: JobStatus | None = None  # pending engine analysis for this player, if any

@@ -48,6 +48,7 @@ async def test_get_puzzles_full_flow(client, monkeypatch, peremil_games):
     body = response.json()
     assert body["username"] == "peremil"
     assert body["games_scanned"] == 5
+    assert body["games_analyzed"] == 5  # all fixture games carry Lichess analysis
     assert body["reason"] is None
     assert len(body["puzzles"]) > 0
     puzzle = body["puzzles"][0]
@@ -643,6 +644,8 @@ async def test_unanalyzed_games_stored_unprocessed_and_job_queued(
     body = resp.json()
     # Analyzed games serve instantly; the unanalyzed ones are queued for the engine.
     assert len(body["puzzles"]) > 0
+    assert body["games_scanned"] == 7
+    assert body["games_analyzed"] == 5  # the two engine-queued games don't count yet
     assert body["reason"] is None
     assert body["job"] is not None
     assert body["job"]["status"] == "queued"
@@ -678,6 +681,7 @@ async def test_all_unanalyzed_returns_analysis_pending(client, monkeypatch, pere
     resp = await client.get("/api/players/peremil/puzzles")
     body = resp.json()
     assert body["puzzles"] == []
+    assert body["games_analyzed"] == 0
     assert body["reason"] == "analysis_pending"  # a notice, not a dead end
     assert body["job"]["total"] == len(games)
 
@@ -711,6 +715,37 @@ async def test_job_endpoint_roundtrip_and_404(client, monkeypatch, peremil_games
     missing = await client.get("/api/jobs/999999")
     assert missing.status_code == 404
     assert missing.json()["detail"] == "job_not_found"
+
+
+@pytest.mark.asyncio
+async def test_budget_failed_job_reports_daily_limit(client, db_sessionmaker):
+    # The banner names the actual (env-tunable) limit, so the endpoint must
+    # attach it — the job's own progress/total reads as the cap otherwise.
+    from datetime import datetime
+
+    from app.config import settings
+    from app.models import Job, Player
+
+    async with db_sessionmaker() as db:
+        player = Player(username="budgetuser")
+        db.add(player)
+        await db.flush()
+        player_trip = Job(
+            player_id=player.id, status="failed", error="player_budget_reached",
+            progress=20, total=40, created_at=datetime.now(),
+        )
+        global_trip = Job(
+            player_id=player.id, status="failed", error="daily_budget_reached",
+            progress=5, total=40, created_at=datetime.now(),
+        )
+        db.add_all([player_trip, global_trip])
+        await db.commit()
+        player_trip_id, global_trip_id = player_trip.id, global_trip.id
+
+    p = (await client.get(f"/api/jobs/{player_trip_id}")).json()
+    assert p["daily_limit"] == settings.max_engine_games_per_day_per_player
+    g = (await client.get(f"/api/jobs/{global_trip_id}")).json()
+    assert g["daily_limit"] == settings.max_engine_games_per_day
 
 
 @pytest.mark.asyncio

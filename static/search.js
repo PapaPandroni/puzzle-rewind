@@ -186,6 +186,7 @@ export async function runSearch(username) {
     }
     state.puzzles = data.puzzles;
     state.gamesScanned = data.games_scanned;
+    state.gamesAnalyzed = data.games_analyzed;
     state.index = 0;
     state.solvedFirstTry = 0;
     renderPuzzle();

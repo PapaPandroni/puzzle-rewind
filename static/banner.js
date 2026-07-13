@@ -28,11 +28,14 @@ function bannerHtml(job) {
     case "done":
       return `<p>Analysis complete &mdash; ${games(job.total)} analyzed.</p>${refreshBtn}`;
     case "failed":
+      // Budget copy names the actual daily limit (from the response — it's
+      // env-tunable), not the job's progress/total: a trip mid-job made
+      // "20/40" read as the cap when earlier jobs had eaten the budget.
       if (job.error === "daily_budget_reached") {
-        return `<p>Daily engine budget reached after ${job.progress}/${job.total} games &mdash; search again tomorrow for the rest.</p>${job.progress > 0 ? refreshBtn : ""}`;
+        return `<p>The site's daily engine budget${job.daily_limit ? ` (${games(job.daily_limit)})` : ""} is used up &mdash; search again after the reset (midnight UTC) and analysis picks up where it left off.</p>${job.progress > 0 ? refreshBtn : ""}`;
       }
       if (job.error === "player_budget_reached") {
-        return `<p>This player's daily analysis budget is used up after ${job.progress}/${job.total} games &mdash; the rest continues tomorrow.</p>${job.progress > 0 ? refreshBtn : ""}`;
+        return `<p>Maximum of ${job.daily_limit ? games(job.daily_limit) : "games"} analyzed for this player today &mdash; search again after the daily reset (midnight UTC) and analysis picks up where it left off.</p>${job.progress > 0 ? refreshBtn : ""}`;
       }
       return `<p>Engine analysis hit an error (${job.progress}/${job.total} done). Puzzles from analyzed games are unaffected.</p>${job.progress > 0 ? refreshBtn : ""}`;
   }

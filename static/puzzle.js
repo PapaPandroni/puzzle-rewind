@@ -63,7 +63,13 @@ export function renderPuzzle() {
       </div>
       <div class="puzzle-counter">Puzzle ${state.index + 1} of ${state.puzzles.length}${
         PERIOD_CONTEXT[state.period]
-          ? ` &middot; ${PERIOD_CONTEXT[state.period]} (${state.gamesScanned} games)`
+          ? ` &middot; ${PERIOD_CONTEXT[state.period]} (${
+              // While a backlog is cooking, "(187 games)" would read as
+              // "only these puzzles in 187 games" — name the analyzed subset.
+              state.gamesAnalyzed < state.gamesScanned
+                ? `${state.gamesAnalyzed} of ${state.gamesScanned} games analyzed`
+                : `${state.gamesScanned} games`
+            })`
           : ""
       }</div>
       <p class="thanks-note">Thank you <a href="https://lichess.org" target="_blank" rel="noopener">Lichess</a> for being open source and awesome.</p>
