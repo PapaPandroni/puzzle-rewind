@@ -1,13 +1,21 @@
 """Background Stockfish worker (§14.1): a single asyncio task in the app lifespan.
 
-Loop: claim the oldest queued job → analyze that player's unprocessed games
-newest-first, two-pass, committing per game (puzzles appear incrementally and a
-crash loses at most one game) → done/failed. No Celery, no Redis — one process.
+Scheduling is round-robin per *game*, not FIFO per job: each cycle services one
+game from the pending job with the lowest progress (tie-break: oldest id). A
+fresh search has progress 0, so it starts showing progress within seconds and
+catches up, then concurrent jobs alternate game-by-game — without this, a
+second search sat on a contextless "waiting" banner until the first job
+finished entirely. Trade-offs, accepted: concurrent jobs share the single
+engine's speed, and a stream of brand-new jobs briefly starves an older
+half-done job while they catch up (bounded by the daily fuse). Commits are per
+game, so puzzles appear incrementally and a crash loses at most one game. No
+Celery, no Redis — one process.
 
 Budget fuses live here and only here: checked before each game, never at job
 creation. A tripped fuse fails the job with a machine-readable error; the
 remaining games stay unprocessed, so the next search simply re-queues them —
-self-healing, no scheduler.
+self-healing, no scheduler. Under round-robin a per-player trip fails only
+that player's job; other jobs keep being serviced.
 """
 
 import asyncio
@@ -94,23 +102,46 @@ async def _fail_job(db: AsyncSession, job: Job, error: str) -> None:
     await db.commit()
 
 
-async def process_job(sessionmaker: async_sessionmaker[AsyncSession], job_id: int) -> None:
-    async with sessionmaker() as db:
-        job = await db.get(Job, job_id)
-        if job is None:
-            return
-        try:
-            while job.progress < job.total:
-                if await games_analyzed_today(db) >= settings.max_engine_games_per_day:
-                    await _fail_job(db, job, "daily_budget_reached")
-                    return
-                if (
-                    await games_analyzed_today(db, job.player_id)
-                    >= settings.max_engine_games_per_day_per_player
-                ):
-                    await _fail_job(db, job, "player_budget_reached")
-                    return
+async def pick_job(db: AsyncSession) -> Job | None:
+    """The pending job to service next (round-robin, see module docstring).
 
+    Several jobs may sit in "running" at once; one game at a time still holds
+    globally. Single uvicorn process on a single Railway replica: no claim
+    race. Horizontal scaling would need SELECT ... FOR UPDATE SKIP LOCKED.
+    """
+    return await db.scalar(
+        select(Job)
+        .where(Job.status.in_(("queued", "running")))
+        .order_by(Job.progress.asc(), Job.id.asc())
+        .limit(1)
+    )
+
+
+async def service_one_game(sessionmaker: async_sessionmaker[AsyncSession]) -> bool:
+    """Process one game of the least-progressed pending job.
+
+    Returns False when no pending job exists (the worker is idle).
+    """
+    async with sessionmaker() as db:
+        job = await pick_job(db)
+        if job is None:
+            return False
+        job_id = job.id
+        if job.status == "queued":
+            job.status = "running"  # committed together with the outcome below
+        try:
+            if await games_analyzed_today(db) >= settings.max_engine_games_per_day:
+                await _fail_job(db, job, "daily_budget_reached")
+                return True
+            if (
+                await games_analyzed_today(db, job.player_id)
+                >= settings.max_engine_games_per_day_per_player
+            ):
+                await _fail_job(db, job, "player_budget_reached")
+                return True
+
+            game = None
+            if job.progress < job.total:
                 game = await db.scalar(
                     select(Game)
                     .where(Game.player_id == job.player_id)
@@ -118,57 +149,56 @@ async def process_job(sessionmaker: async_sessionmaker[AsyncSession], job_id: in
                     .order_by(Game.played_at.desc())
                     .limit(1)
                 )
-                if game is None:
-                    break
-
-                try:
-                    merged, puzzles = await analyse_and_extract(
-                        game.moves_san or "", game.player_color
-                    )
-                except ValueError:
-                    # Unparseable movelist: mark it processed with no puzzles so
-                    # it can't clog the queue, and keep going.
-                    logger.warning(
-                        "worker: unparseable moves in game %s; skipped", game.lichess_id
-                    )
-                    game.raw_analysis_processed = True
-                    game.analyzed_at = _utcnow()
-                    job.progress += 1
-                    await db.commit()
-                    continue
-
-                for p in puzzles:
-                    db.add(
-                        Puzzle(
-                            game_id=game.id,
-                            ply=p["ply"],
-                            fen=p["fen"],
-                            side_to_move=p["side_to_move"],
-                            solution_uci=p["solution_uci"],
-                            solution_san=p["solution_san"],
-                            played_uci=p["played_uci"],
-                            played_san=p["played_san"],
-                            variation_san=" ".join(p["variation_san"]),
-                            win_drop=p["win_drop"],
-                            eval_before_cp=p["eval_before_cp"],
-                            eval_after_cp=p["eval_after_cp"],
-                        )
-                    )
-                # Flag + puzzles flip in the same commit, so a crash either
-                # loses this one game entirely (retried by the next job) or
-                # lands it completely — the (game_id, ply) unique constraint
-                # can never be violated by re-processing.
-                game.raw_analysis_processed = True
-                game.analyzed_at = _utcnow()
-                game.analysis_json = json.dumps(merged)
-                job.progress += 1
+            if game is None:
+                job.status = "done"
                 await db.commit()
+                return True
 
-            job.status = "done"
+            try:
+                merged, puzzles = await analyse_and_extract(
+                    game.moves_san or "", game.player_color
+                )
+            except ValueError:
+                # Unparseable movelist: mark it processed with no puzzles so
+                # it can't clog the queue, and keep going.
+                logger.warning(
+                    "worker: unparseable moves in game %s; skipped", game.lichess_id
+                )
+                merged, puzzles = None, []
+
+            for p in puzzles:
+                db.add(
+                    Puzzle(
+                        game_id=game.id,
+                        ply=p["ply"],
+                        fen=p["fen"],
+                        side_to_move=p["side_to_move"],
+                        solution_uci=p["solution_uci"],
+                        solution_san=p["solution_san"],
+                        played_uci=p["played_uci"],
+                        played_san=p["played_san"],
+                        variation_san=" ".join(p["variation_san"]),
+                        win_drop=p["win_drop"],
+                        eval_before_cp=p["eval_before_cp"],
+                        eval_after_cp=p["eval_after_cp"],
+                    )
+                )
+            # Flag + puzzles flip in the same commit, so a crash either loses
+            # this one game entirely (retried by the next job) or lands it
+            # completely — the (game_id, ply) unique constraint can never be
+            # violated by re-processing. The final game also flips the job to
+            # done in the same commit, so jobs never linger running-complete.
+            game.raw_analysis_processed = True
+            game.analyzed_at = _utcnow()
+            if merged is not None:
+                game.analysis_json = json.dumps(merged)
+            job.progress += 1
+            if job.progress >= job.total:
+                job.status = "done"
             await db.commit()
         except (chess.engine.EngineTerminatedError, chess.engine.EngineError) as exc:
             logger.error("worker: engine failure in job %s: %s", job_id, exc)
-            await engine_handle.quit()  # drop the broken process; next job respawns
+            await engine_handle.quit()  # drop the broken process; next use respawns
             await db.rollback()
             job = await db.get(Job, job_id)
             if job is not None:
@@ -181,30 +211,15 @@ async def process_job(sessionmaker: async_sessionmaker[AsyncSession], job_id: in
             job = await db.get(Job, job_id)
             if job is not None:
                 await _fail_job(db, job, "internal_error")
-
-
-async def claim_next_job(sessionmaker: async_sessionmaker[AsyncSession]) -> int | None:
-    async with sessionmaker() as db:
-        # Single uvicorn process on a single Railway replica: no claim race.
-        # Horizontal scaling would need SELECT ... FOR UPDATE SKIP LOCKED here.
-        job = await db.scalar(
-            select(Job).where(Job.status == "queued").order_by(Job.id).limit(1)
-        )
-        if job is None:
-            return None
-        job.status = "running"
-        await db.commit()
-        return job.id
+        return True
 
 
 async def worker_loop(sessionmaker: async_sessionmaker[AsyncSession]) -> None:
     """Single-flight worker; must never die silently."""
     while True:
         try:
-            job_id = await claim_next_job(sessionmaker)
-            if job_id is not None:
-                await process_job(sessionmaker, job_id)
-                continue  # look for the next job immediately
+            if await service_one_game(sessionmaker):
+                continue  # more work may be pending — keep going immediately
             await engine_handle.quit_if_idle(settings.engine_idle_quit_seconds)
         except asyncio.CancelledError:
             raise

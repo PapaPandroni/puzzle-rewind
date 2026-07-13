@@ -18,10 +18,9 @@ from app.models import Game, Job, Player, Puzzle
 from app.worker import (
     _utcnow,
     analyse_and_extract,
-    claim_next_job,
     games_analyzed_today,
-    process_job,
     reset_stale_jobs,
+    service_one_game,
 )
 
 # A legal game whose ply 12 (7. Qe3??) hangs the queen — same sequence the
@@ -48,7 +47,14 @@ def _fake_puzzle(ply: int = BLUNDER_PLY) -> dict:
     }
 
 
-async def _seed(db, n_unprocessed: int, *, username: str = "engineuser") -> Player:
+async def _run_until_idle(sessionmaker) -> None:
+    while await service_one_game(sessionmaker):
+        pass
+
+
+async def _seed(
+    db, n_unprocessed: int, *, username: str = "engineuser", color: str = "white"
+) -> Player:
     player = Player(username=username)
     db.add(player)
     await db.flush()
@@ -57,7 +63,7 @@ async def _seed(db, n_unprocessed: int, *, username: str = "engineuser") -> Play
             Game(
                 lichess_id=f"{username[:6]}{i:04d}",
                 player_id=player.id,
-                player_color="white",
+                player_color=color,
                 player_rating=1500,
                 opponent_name="opp",
                 opponent_rating=1500,
@@ -94,7 +100,7 @@ def _patch_extract(monkeypatch, side_effects):
     return calls
 
 
-async def test_process_job_happy_path(db_sessionmaker, monkeypatch):
+async def test_single_job_happy_path(db_sessionmaker, monkeypatch):
     entries = [{"eval": 0}]
     _patch_extract(monkeypatch, [(entries, [_fake_puzzle()])])
 
@@ -102,7 +108,7 @@ async def test_process_job_happy_path(db_sessionmaker, monkeypatch):
         player = await _seed(db, 3)
         job = await _queue_job(db, player, total=3)
 
-    await process_job(db_sessionmaker, job.id)
+    await _run_until_idle(db_sessionmaker)
 
     async with db_sessionmaker() as db:
         job = await db.get(Job, job.id)
@@ -127,7 +133,7 @@ async def test_games_processed_newest_first(db_sessionmaker, monkeypatch):
         player = await _seed(db, 3)  # game i is i days old
         job = await _queue_job(db, player, total=1)  # only the first gets done
 
-    await process_job(db_sessionmaker, job.id)
+    await _run_until_idle(db_sessionmaker)
 
     async with db_sessionmaker() as db:
         processed = (
@@ -150,7 +156,7 @@ async def test_midjob_crash_keeps_committed_games(db_sessionmaker, monkeypatch):
         player = await _seed(db, 3)
         job = await _queue_job(db, player, total=3)
 
-    await process_job(db_sessionmaker, job.id)
+    await _run_until_idle(db_sessionmaker)
 
     async with db_sessionmaker() as db:
         job = await db.get(Job, job.id)
@@ -175,7 +181,7 @@ async def test_engine_failure_fails_job_and_leaves_games_unprocessed(
         player = await _seed(db, 2)
         job = await _queue_job(db, player, total=2)
 
-    await process_job(db_sessionmaker, job.id)
+    await _run_until_idle(db_sessionmaker)
 
     async with db_sessionmaker() as db:
         job = await db.get(Job, job.id)
@@ -201,7 +207,7 @@ async def test_unparseable_moves_skipped_job_continues(db_sessionmaker, monkeypa
         player = await _seed(db, 2)
         job = await _queue_job(db, player, total=2)
 
-    await process_job(db_sessionmaker, job.id)
+    await _run_until_idle(db_sessionmaker)
 
     async with db_sessionmaker() as db:
         job = await db.get(Job, job.id)
@@ -226,7 +232,7 @@ async def test_global_fuse_trips_before_first_game(db_sessionmaker, monkeypatch)
         player = await _seed(db, 1)
         job = await _queue_job(db, player, total=1)
 
-    await process_job(db_sessionmaker, job.id)
+    await _run_until_idle(db_sessionmaker)
 
     async with db_sessionmaker() as db:
         job = await db.get(Job, job.id)
@@ -247,7 +253,7 @@ async def test_global_fuse_trips_mid_job(db_sessionmaker, monkeypatch):
         player = await _seed(db, 2)
         job = await _queue_job(db, player, total=2)
 
-    await process_job(db_sessionmaker, job.id)
+    await _run_until_idle(db_sessionmaker)
 
     async with db_sessionmaker() as db:
         job = await db.get(Job, job.id)
@@ -272,8 +278,7 @@ async def test_player_fuse_is_per_player(db_sessionmaker, monkeypatch):
         other = await _seed(db, 1, username="otheruser")
         other_job = await _queue_job(db, other, total=1)
 
-    await process_job(db_sessionmaker, job.id)
-    await process_job(db_sessionmaker, other_job.id)
+    await _run_until_idle(db_sessionmaker)
 
     async with db_sessionmaker() as db:
         job = await db.get(Job, job.id)
@@ -299,20 +304,76 @@ async def test_reset_stale_jobs_requeues_running(db_sessionmaker):
         assert (await db.get(Job, done.id)).status == "done"
 
 
-async def test_claim_next_job_oldest_first(db_sessionmaker):
+# --- round-robin scheduling ---------------------------------------------------
+# The fake records (moves, color) per call, so giving each player a distinct
+# color makes the service order directly observable.
+
+
+async def test_round_robin_alternates_between_jobs(db_sessionmaker, monkeypatch):
+    calls = _patch_extract(monkeypatch, [([{"eval": 0}], [])])
+
     async with db_sessionmaker() as db:
-        player = await _seed(db, 0)
-        first = await _queue_job(db, player, total=1)
-        second = await _queue_job(db, player, total=1)
+        a = await _seed(db, 2, username="whiteuser", color="white")
+        b = await _seed(db, 2, username="blackuser", color="black")
+        job_a = await _queue_job(db, a, total=2)
+        job_b = await _queue_job(db, b, total=2)
 
-    claimed = await claim_next_job(db_sessionmaker)
-    assert claimed == first.id
+    for _ in range(4):
+        assert await service_one_game(db_sessionmaker)
+
+    # Min-progress with oldest-id tie-break: A, B, A, B — never A-to-completion.
+    assert [c[1] for c in calls] == ["white", "black", "white", "black"]
 
     async with db_sessionmaker() as db:
-        assert (await db.get(Job, first.id)).status == "running"
-        assert (await db.get(Job, second.id)).status == "queued"
+        assert (await db.get(Job, job_a.id)).status == "done"
+        assert (await db.get(Job, job_b.id)).status == "done"
 
-    assert await claim_next_job(db_sessionmaker) == second.id
+
+async def test_new_job_catches_up_before_older_job_continues(db_sessionmaker, monkeypatch):
+    calls = _patch_extract(monkeypatch, [([{"eval": 0}], [])])
+
+    async with db_sessionmaker() as db:
+        a = await _seed(db, 2, username="whiteuser", color="white")
+        job_a = await _queue_job(db, a, total=2)
+
+    assert await service_one_game(db_sessionmaker)  # A leads 1-0
+
+    async with db_sessionmaker() as db:
+        b = await _seed(db, 2, username="blackuser", color="black")
+        await _queue_job(db, b, total=2)
+
+    # The fresh job (progress 0) is served before the older one's next game —
+    # this is the "second search shows progress within seconds" property.
+    assert await service_one_game(db_sessionmaker)
+    assert await service_one_game(db_sessionmaker)
+    assert [c[1] for c in calls] == ["white", "black", "white"]
+
+    async with db_sessionmaker() as db:
+        assert (await db.get(Job, job_a.id)).status == "done"
+
+
+async def test_first_service_marks_job_running_and_last_marks_done(
+    db_sessionmaker, monkeypatch
+):
+    _patch_extract(monkeypatch, [([{"eval": 0}], [])])
+
+    async with db_sessionmaker() as db:
+        player = await _seed(db, 2)
+        job = await _queue_job(db, player, total=2)
+
+    assert await service_one_game(db_sessionmaker)
+    async with db_sessionmaker() as db:
+        assert (await db.get(Job, job.id)).status == "running"
+
+    assert await service_one_game(db_sessionmaker)
+    async with db_sessionmaker() as db:
+        # done lands in the same commit as the final game — no lingering
+        # running-complete state between service calls.
+        refreshed = await db.get(Job, job.id)
+        assert refreshed.status == "done"
+        assert refreshed.progress == 2
+
+    assert not await service_one_game(db_sessionmaker)  # idle
 
 
 async def test_games_analyzed_today_ignores_yesterday(db_sessionmaker):
