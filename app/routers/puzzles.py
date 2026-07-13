@@ -4,7 +4,7 @@ from typing import Annotated, Literal
 
 import chess
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
-from sqlalchemy import select
+from sqlalchemy import false, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -20,9 +20,15 @@ from app.analysis import (
 from app.config import settings
 from app.database import get_db
 from app.lichess import LichessRateLimited, LichessUserNotFound, fetch_games
-from app.models import Game, Player, Puzzle
+from app.models import Game, Job, Player, Puzzle
 from app.rate_limit import limiter
-from app.schemas import AttemptRequest, AttemptResponse, PuzzleSetResponse, PuzzleSummary
+from app.schemas import (
+    AttemptRequest,
+    AttemptResponse,
+    JobStatus,
+    PuzzleSetResponse,
+    PuzzleSummary,
+)
 
 router = APIRouter()
 
@@ -69,13 +75,23 @@ def _to_epoch_ms(dt: datetime) -> int:
 
 
 async def _persist_game(db: AsyncSession, player: Player, username: str, game: dict) -> bool:
-    """Store one exported game + its puzzle candidates; False if skipped or known."""
+    """Store one exported game + its puzzle candidates; False if skipped or known.
+
+    Games with Lichess analysis get their puzzles extracted inline (free,
+    instant — §14.3 hierarchy). Games without are stored unprocessed for the
+    background Stockfish worker to pick up.
+    """
     existing = await db.scalar(select(Game).where(Game.lichess_id == game["id"]))
     if existing is not None:
         return False
 
     color = determine_player_color(game, username)
     if color is None:
+        return False
+
+    # With the analysed filter dropped, aborted/zero-move games arrive too —
+    # nothing to analyze or solve there.
+    if not game.get("moves"):
         return False
 
     opponent_color = "black" if color == "white" else "white"
@@ -85,6 +101,7 @@ async def _persist_game(db: AsyncSession, player: Player, username: str, game: d
     if "rating" not in game["players"][opponent_color]:
         return False
 
+    has_analysis = bool(game.get("analysis"))
     game_row = Game(
         lichess_id=game["id"],
         player_id=player.id,
@@ -94,11 +111,13 @@ async def _persist_game(db: AsyncSession, player: Player, username: str, game: d
         opponent_rating=game["players"][opponent_color]["rating"],
         speed=game["speed"],
         played_at=datetime.fromtimestamp(game["createdAt"] / 1000, tz=UTC).replace(tzinfo=None),
-        raw_analysis_processed=True,
-        eval_source="lichess",
-        moves_san=game.get("moves") or None,
+        raw_analysis_processed=has_analysis,
+        eval_source="lichess" if has_analysis else "stockfish",
+        moves_san=game["moves"],
     )
     db.add(game_row)
+    if not has_analysis:
+        return True  # the worker extracts this game's puzzles later
     await db.flush()  # assign game_row.id
 
     for puzzle_data in extract_puzzles(game, username, settings.min_win_drop_stored):
@@ -138,8 +157,13 @@ async def _stream_and_persist(
     """
     received = 0
     oldest_received: datetime | None = None
+    # analysed=False is the single flip point for all three sync paths (§14):
+    # every fetch sees the player's *whole* game stream, keeping the coverage
+    # invariants coherent — they count received games, whatever their analysis
+    # state. Mixing modes would claim coverage over ranges whose unanalyzed
+    # games were silently never stored.
     async for game in fetch_games(
-        username, max_games=max_games, since=since, until=until, timeout=timeout
+        username, max_games=max_games, since=since, until=until, timeout=timeout, analysed=False
     ):
         received += 1
         played_at = datetime.fromtimestamp(game["createdAt"] / 1000, tz=UTC).replace(tzinfo=None)
@@ -170,8 +194,9 @@ async def _sync_player_games(
     the newest stored game. The forward branch paginates on a full page to keep
     the top edge gap-free; the backfill branch only ever extends the bottom edge.
 
-    Returns a "reason" string for empty results (no analyzed games / user has
-    none), or None. Raises LichessUserNotFound / LichessRateLimited upstream.
+    Returns a "reason" string for empty results (the user has no standard
+    games at all), or None. Raises LichessUserNotFound / LichessRateLimited
+    upstream.
     """
     fetched_any = False
     since_ms: int | None = None
@@ -261,8 +286,43 @@ async def _sync_player_games(
     await db.commit()
 
     if forward and not fetched_any and since_ms is None:
-        return "no_analyzed_games"
+        # With the analysed filter dropped (§14), an empty first fetch means
+        # the user has no standard games at all — not merely none analyzed.
+        return "no_games"
     return None
+
+
+async def _ensure_job(db: AsyncSession, player: Player) -> Job | None:
+    """Return the player's pending analysis job, creating one if unprocessed
+    games exist (§14.1). At most one queued/running job per player; `total` is
+    capped per search, so repeat searches drain a larger backlog chunk by
+    chunk with no scheduler. Budget fuses are checked by the worker, never
+    here (single enforcement point) — with a spent budget the job simply
+    fails within seconds and the banner shows the honest copy.
+    """
+    pending = await db.scalar(
+        select(Job)
+        .where(Job.player_id == player.id, Job.status.in_(("queued", "running")))
+        .order_by(Job.id.desc())
+        .limit(1)
+    )
+    if pending is not None:
+        return pending
+    backlog = await db.scalar(
+        select(func.count())
+        .select_from(Game)
+        .where(Game.player_id == player.id, Game.raw_analysis_processed == false())
+    )
+    if not backlog:
+        return None
+    job = Job(
+        player_id=player.id,
+        total=min(backlog, settings.max_engine_games_per_search),
+        created_at=_utcnow(),
+    )
+    db.add(job)
+    await db.commit()
+    return job
 
 
 def _effective_threshold(preset: Preset, threshold: int | None, game_player_rating: int) -> int:
@@ -323,6 +383,12 @@ async def get_player_puzzles(
         except LichessRateLimited:
             raise HTTPException(status_code=503, detail="lichess_rate_limited") from None
 
+    # Queue engine analysis for any unprocessed games — checked even on
+    # cache-fresh hits, so a >40-game backlog drains across searches and a
+    # budget-failed job gets re-queued the next day.
+    job = await _ensure_job(db, player)
+    job_status = JobStatus.model_validate(job) if job is not None else None
+
     games_query = select(Game).where(Game.player_id == player.id).options(selectinload(Game.puzzles))
     if period_start is not None:
         games_query = games_query.where(Game.played_at >= period_start)
@@ -334,13 +400,14 @@ async def get_player_puzzles(
             has_any = await db.scalar(
                 select(Game.id).where(Game.player_id == player.id).limit(1)
             )
-            reason = "no_games_in_period" if has_any is not None else "no_analyzed_games"
+            reason = "no_games_in_period" if has_any is not None else "no_games"
         return PuzzleSetResponse(
             username=username,
             player_ratings_seen=[],
             games_scanned=0,
             puzzles=[],
             reason=reason,
+            job=job_status,
         )
 
     candidates: list[PuzzleSummary] = []
@@ -372,7 +439,10 @@ async def get_player_puzzles(
         player_ratings_seen=sorted({g.player_rating for g in games}),
         games_scanned=len(games),
         puzzles=candidates,
-        reason=None,
+        # Games exist but nothing solvable yet + engine work pending: tell the
+        # frontend to show the "analyzing" notice instead of a dead end.
+        reason="analysis_pending" if not candidates and job_status is not None else None,
+        job=job_status,
     )
 
 

@@ -11,6 +11,7 @@ def _make_fake_fetch_games(games: list[dict]):
         since: int | None = None,
         until: int | None = None,
         timeout: float = 30.0,
+        analysed: bool = True,
     ):
         for g in games:
             yield g
@@ -26,6 +27,7 @@ def _make_raising_fetch_games(exc: Exception):
         since: int | None = None,
         until: int | None = None,
         timeout: float = 30.0,
+        analysed: bool = True,
     ):
         raise exc
         yield  # pragma: no cover - makes this an async generator
@@ -72,7 +74,7 @@ async def test_threshold_filtering_is_query_time_not_refetch(client, monkeypatch
     call_count = 0
     fake = _make_fake_fetch_games(peremil_games)
 
-    async def counting_fake_fetch_games(username, *, max_games=20, since=None, until=None, timeout=30.0):
+    async def counting_fake_fetch_games(username, *, max_games=20, since=None, until=None, timeout=30.0, analysed=True):
         nonlocal call_count
         call_count += 1
         async for g in fake(username, max_games=max_games, since=since):
@@ -232,13 +234,16 @@ async def test_game_vs_ai_without_opponent_rating_is_skipped_not_crashed(
 
 
 @pytest.mark.asyncio
-async def test_no_analyzed_games_returns_empty_with_reason(client, monkeypatch):
+async def test_no_games_returns_empty_with_reason(client, monkeypatch):
+    # With the analysed filter dropped (§14), an empty stream means the user
+    # has no standard games at all — the reason was renamed accordingly.
     monkeypatch.setattr("app.routers.puzzles.fetch_games", _make_fake_fetch_games([]))
     resp = await client.get("/api/players/nogames/puzzles")
     assert resp.status_code == 200
     body = resp.json()
     assert body["puzzles"] == []
-    assert body["reason"] == "no_analyzed_games"
+    assert body["reason"] == "no_games"
+    assert body["job"] is None
 
 
 @pytest.mark.asyncio
@@ -482,7 +487,7 @@ async def test_period_backfill_fetches_once_then_serves_from_coverage(
     games = _at_days_ago(peremil_games[:2], [("recent0001", 5), ("recent0002", 10)])
     calls: list[dict] = []
 
-    async def counting_fake(username, *, max_games=20, since=None, until=None, timeout=30.0):
+    async def counting_fake(username, *, max_games=20, since=None, until=None, timeout=30.0, analysed=True):
         calls.append({"max_games": max_games, "since": since, "until": until, "timeout": timeout})
         for g in games:
             yield g
@@ -567,7 +572,7 @@ async def test_period_backfill_heals_forward_fill_hole(client, monkeypatch, db_s
     }
     captured: list[dict] = []
 
-    async def fake_fetch_games(username, *, max_games=20, since=None, until=None, timeout=30.0):
+    async def fake_fetch_games(username, *, max_games=20, since=None, until=None, timeout=30.0, analysed=True):
         captured.append({"since": since, "until": until})
         yield hole_game
 
@@ -608,3 +613,114 @@ async def test_single_move_requests_unchanged_regression(db_sessionmaker, client
     assert body["variation_san"] == LINE_SAN.split()  # full line, exactly as Phase 1
     assert body["opponent_reply_uci"] is None
     assert body["line_complete"] is True
+
+
+# --- Phase 3: engine jobs -----------------------------------------------------
+
+
+def _strip_analysis(game: dict, new_id: str) -> dict:
+    g = dict(game)
+    g.pop("analysis", None)
+    g["id"] = new_id
+    return g
+
+
+@pytest.mark.asyncio
+async def test_unanalyzed_games_stored_unprocessed_and_job_queued(
+    client, db_sessionmaker, monkeypatch, peremil_games
+):
+    mixed = peremil_games + [
+        _strip_analysis(peremil_games[0], "unanalyzd01"),
+        _strip_analysis(peremil_games[1], "unanalyzd02"),
+    ]
+    monkeypatch.setattr("app.routers.puzzles.fetch_games", _make_fake_fetch_games(mixed))
+
+    resp = await client.get(
+        "/api/players/peremil/puzzles", params={"preset": "custom", "threshold": 10}
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    # Analyzed games serve instantly; the unanalyzed ones are queued for the engine.
+    assert len(body["puzzles"]) > 0
+    assert body["reason"] is None
+    assert body["job"] is not None
+    assert body["job"]["status"] == "queued"
+    assert body["job"]["total"] == 2
+    assert body["job"]["progress"] == 0
+
+    from sqlalchemy import func, select
+
+    from app.models import Game, Puzzle
+
+    async with db_sessionmaker() as db:
+        stored = await db.scalar(select(Game).where(Game.lichess_id == "unanalyzd01"))
+        assert stored.raw_analysis_processed is False
+        assert stored.eval_source == "stockfish"
+        assert stored.moves_san
+        n_puzzles = await db.scalar(
+            select(func.count()).select_from(Puzzle).where(Puzzle.game_id == stored.id)
+        )
+        assert n_puzzles == 0  # extraction is the worker's job
+
+    # Repeat search: the pending job is returned, not duplicated.
+    resp2 = await client.get(
+        "/api/players/peremil/puzzles", params={"preset": "custom", "threshold": 10}
+    )
+    assert resp2.json()["job"]["id"] == body["job"]["id"]
+
+
+@pytest.mark.asyncio
+async def test_all_unanalyzed_returns_analysis_pending(client, monkeypatch, peremil_games):
+    games = [_strip_analysis(g, f"unan{i:07d}") for i, g in enumerate(peremil_games)]
+    monkeypatch.setattr("app.routers.puzzles.fetch_games", _make_fake_fetch_games(games))
+
+    resp = await client.get("/api/players/peremil/puzzles")
+    body = resp.json()
+    assert body["puzzles"] == []
+    assert body["reason"] == "analysis_pending"  # a notice, not a dead end
+    assert body["job"]["total"] == len(games)
+
+
+@pytest.mark.asyncio
+async def test_fully_analyzed_pool_has_no_job(client, monkeypatch, peremil_games):
+    monkeypatch.setattr("app.routers.puzzles.fetch_games", _make_fake_fetch_games(peremil_games))
+    resp = await client.get("/api/players/peremil/puzzles")
+    assert resp.json()["job"] is None
+
+
+@pytest.mark.asyncio
+async def test_job_total_capped_per_search(client, monkeypatch, peremil_games):
+    games = [_strip_analysis(peremil_games[0], f"unan{i:07d}") for i in range(50)]
+    monkeypatch.setattr("app.routers.puzzles.fetch_games", _make_fake_fetch_games(games))
+
+    resp = await client.get("/api/players/peremil/puzzles")
+    assert resp.json()["job"]["total"] == 40  # max_engine_games_per_search
+
+
+@pytest.mark.asyncio
+async def test_job_endpoint_roundtrip_and_404(client, monkeypatch, peremil_games):
+    games = [_strip_analysis(peremil_games[0], "unan0000001")]
+    monkeypatch.setattr("app.routers.puzzles.fetch_games", _make_fake_fetch_games(games))
+    body = (await client.get("/api/players/peremil/puzzles")).json()
+
+    resp = await client.get(f"/api/jobs/{body['job']['id']}")
+    assert resp.status_code == 200
+    assert resp.json() == body["job"]
+
+    missing = await client.get("/api/jobs/999999")
+    assert missing.status_code == 404
+    assert missing.json()["detail"] == "job_not_found"
+
+
+@pytest.mark.asyncio
+async def test_zero_move_games_are_not_stored_or_queued(client, monkeypatch, peremil_games):
+    # With the analysed filter dropped, aborted games arrive too; nothing to
+    # analyze or solve there, so they must not be stored or queue engine work.
+    aborted = _strip_analysis(peremil_games[0], "aborted001")
+    aborted["moves"] = ""
+    monkeypatch.setattr("app.routers.puzzles.fetch_games", _make_fake_fetch_games([aborted]))
+
+    resp = await client.get("/api/players/peremil/puzzles")
+    body = resp.json()
+    assert body["games_scanned"] == 0
+    assert body["job"] is None

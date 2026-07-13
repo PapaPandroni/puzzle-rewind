@@ -12,6 +12,7 @@ from sqlalchemy import inspect
 from app.database import async_session, engine
 from app.engine import engine_handle
 from app.rate_limit import limiter
+from app.routers.jobs import router as jobs_router
 from app.routers.puzzles import router as puzzles_router
 from app.worker import reset_stale_jobs, worker_loop
 
@@ -68,6 +69,7 @@ async def healthz():
 
 
 app.include_router(puzzles_router)
+app.include_router(jobs_router)
 
 # Mounted last so "/api/*" and "/healthz" above take precedence over static files.
 app.mount("/", StaticFiles(directory="static", html=True), name="static")

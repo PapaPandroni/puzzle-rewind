@@ -33,22 +33,28 @@ async def fetch_games(
     since: int | None = None,
     until: int | None = None,
     timeout: float = 30.0,
+    analysed: bool = True,
 ) -> AsyncIterator[dict[str, Any]]:
-    """Stream a player's analyzed standard games from the Lichess export API.
+    """Stream a player's standard games from the Lichess export API.
 
-    Yields one parsed game dict per NDJSON line. Games missing an "analysis"
-    field despite analysed=true are skipped defensively (§5.3). `since`/`until`
-    are epoch milliseconds; period backfills pass a longer `timeout` because
-    hundreds of games stream for tens of seconds (§13.2).
+    Yields one parsed game dict per NDJSON line. With `analysed=True` only
+    server-analyzed games are requested, and games missing an "analysis" field
+    anyway are skipped defensively (§5.3). With `analysed=False` the filter is
+    *omitted* — Lichess treats an explicit analysed=false as "only unanalyzed
+    games", but the Phase 3 sync wants all of them (evals still attached where
+    they exist). `since`/`until` are epoch milliseconds; period backfills pass
+    a longer `timeout` because hundreds of games stream for tens of seconds
+    (§13.2).
     """
     url = f"{settings.lichess_base}/api/games/user/{username}"
     params: dict[str, Any] = {
         "max": max_games,
-        "analysed": "true",
         "evals": "true",
         "moves": "true",
         "perfType": STANDARD_PERF_TYPES,
     }
+    if analysed:
+        params["analysed"] = "true"
     if since is not None:
         params["since"] = since
     if until is not None:
@@ -72,6 +78,6 @@ async def fetch_games(
                 game = json.loads(line)
                 if game.get("variant") != "standard":
                     continue
-                if not game.get("analysis"):
+                if analysed and not game.get("analysis"):
                     continue
                 yield game

@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class PuzzleSummary(BaseModel):
@@ -17,12 +17,27 @@ class PuzzleSummary(BaseModel):
     mover_moves_in_line: int  # how many line moves "Full line" mode requires (≤3)
 
 
+class JobStatus(BaseModel):
+    """Background engine-analysis job (§14.1), inlined in the puzzles response
+    so the frontend can render the progress banner without an extra request;
+    GET /api/jobs/{id} serves the same shape for polling."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    status: Literal["queued", "running", "done", "failed"]
+    progress: int
+    total: int
+    error: str | None = None
+
+
 class PuzzleSetResponse(BaseModel):
     username: str
     player_ratings_seen: list[int]
     games_scanned: int
     puzzles: list[PuzzleSummary]
     reason: str | None = None
+    job: JobStatus | None = None  # pending engine analysis for this player, if any
 
 
 class AttemptRequest(BaseModel):

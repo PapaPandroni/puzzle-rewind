@@ -49,7 +49,7 @@ def _capturing_fetch(batches: list[list[dict]]):
     """Fake fetch_games yielding one batch per call; records each call's kwargs."""
     calls: list[dict] = []
 
-    async def fake(username, *, max_games=20, since=None, until=None, timeout=30.0):
+    async def fake(username, *, max_games=20, since=None, until=None, timeout=30.0, analysed=True):
         calls.append({"max_games": max_games, "since": since, "until": until, "timeout": timeout})
         batch = batches[len(calls) - 1] if len(calls) <= len(batches) else []
         for g in batch:

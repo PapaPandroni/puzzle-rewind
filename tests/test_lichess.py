@@ -166,3 +166,41 @@ async def test_fetch_games_sends_bearer_token_when_configured(monkeypatch):
         pass
 
     assert captured["authorization"] == "Bearer test-token"
+
+
+def _param_capturing_transport(body: bytes, captured_params: dict) -> httpx.MockTransport:
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured_params.update(dict(request.url.params))
+        return httpx.Response(200, content=body)
+
+    return httpx.MockTransport(handler)
+
+
+@pytest.mark.asyncio
+async def test_fetch_games_analysed_false_omits_param_and_yields_unanalyzed(monkeypatch):
+    # analysed=False must OMIT the query param (an explicit analysed=false
+    # would ask Lichess for *only unanalyzed* games — §14 wants all of them)
+    # and pass analysis-less games through instead of skipping them.
+    body = (
+        b'{"id":"analyzed","variant":"standard","analysis":[{"eval":0}]}\n'
+        b'{"id":"unanalyzed","variant":"standard"}\n'
+    )
+    captured_params: dict = {}
+    _patch_client(monkeypatch, _param_capturing_transport(body, captured_params))
+
+    games = [g async for g in lichess.fetch_games("someone", analysed=False)]
+
+    assert [g["id"] for g in games] == ["analyzed", "unanalyzed"]
+    assert "analysed" not in captured_params
+    assert captured_params["evals"] == "true"  # analyzed games still arrive with evals
+
+
+@pytest.mark.asyncio
+async def test_fetch_games_default_still_requests_analysed_only(monkeypatch):
+    body = b'{"id":"analyzed","variant":"standard","analysis":[{"eval":0}]}\n'
+    captured_params: dict = {}
+    _patch_client(monkeypatch, _param_capturing_transport(body, captured_params))
+
+    [g async for g in lichess.fetch_games("someone")]
+
+    assert captured_params["analysed"] == "true"
