@@ -240,7 +240,7 @@ Work in this exact order; each step ends with something runnable and its tests p
 3. [x] **Frontend line mode:** mode toggle, guided line flow with auto-replies, full-line reveal animation, summary scoring = clean lines. Verified in a real (headless) browser against a real account.
 4. [x] **Coverage-window sync:** migration (`history_fetched_until`), backward-fill logic, `until` in the Lichess client, period caps in config. Sync + client tests.
 5. [x] **Period endpoint + UI:** `period` param, `played_at` filtering, period picker, loading copy, longer read timeout. API tests + `last20` regression.
-6. [ ] **Deploy + calibrate:** Railway deploy, run Year/All against the §6.3 calibration accounts, sanity-check pool sizes and fetch times; tune caps if needed. *(Pending merge of `phase-2-depth`.)*
+6. [ ] **Deploy + calibrate:** Railway deploy, run Year/All against the §6.3 calibration accounts, sanity-check pool sizes and fetch times; tune caps if needed. *(2026-07-13: deploy half done — merged to `main` and live; the Year/All calibration drill was never recorded as run. Fold it into step 11's tuning pass, noting Phase 3 changed the ground: period fetches now pull unanalyzed games too, so Year/All on a fresh account both fetches more and queues engine work.)*
 
 ### Phase 3
 7. [x] **Engine module + Dockerfile:** Stockfish in the image, `app/engine.py` producing Lichess-shaped analysis, `--network none` boot check, engine-marked tests. *(Done 2026-07-13; Debian trixie ships Stockfish 17.1 at `/usr/games/stockfish`, exposed via `STOCKFISH_PATH`.)*
