@@ -78,8 +78,16 @@ async def _seed(
     return player
 
 
-async def _queue_job(db, player: Player, total: int) -> Job:
-    job = Job(player_id=player.id, status="queued", total=total, created_at=_utcnow())
+async def _queue_job(
+    db, player: Player, total: int, period_start: datetime | None = None
+) -> Job:
+    job = Job(
+        player_id=player.id,
+        status="queued",
+        total=total,
+        period_start=period_start,
+        created_at=_utcnow(),
+    )
     db.add(job)
     await db.commit()
     return job
@@ -140,6 +148,53 @@ async def test_games_processed_newest_first(db_sessionmaker, monkeypatch):
             await db.scalars(select(Game).where(Game.raw_analysis_processed))
         ).all()
         assert [g.lichess_id for g in processed] == ["engine0000"]  # the newest
+
+
+async def test_worker_skips_out_of_period_games(db_sessionmaker, monkeypatch):
+    _patch_extract(monkeypatch, [([{"eval": 0}], [])])
+
+    async with db_sessionmaker() as db:
+        player = await _seed(db, 3)  # game i is i days old
+        # Scope covers the day-0 and day-1 games only.
+        job = await _queue_job(
+            db, player, total=2, period_start=NOW - timedelta(days=1, hours=12)
+        )
+
+    await _run_until_idle(db_sessionmaker)
+
+    async with db_sessionmaker() as db:
+        job = await db.get(Job, job.id)
+        assert job.status == "done"
+        assert job.progress == 2
+        out_of_scope = await db.scalar(
+            select(Game).where(Game.lichess_id == "engine0002")
+        )
+        assert out_of_scope.raw_analysis_processed is False  # never touched
+
+
+async def test_worker_marks_done_when_in_period_set_exhausted(
+    db_sessionmaker, monkeypatch
+):
+    _patch_extract(monkeypatch, [([{"eval": 0}], [])])
+
+    async with db_sessionmaker() as db:
+        player = await _seed(db, 3)
+        # total overshoots the in-scope set (2 games): the worker must finish
+        # via the game-is-None branch, not stall or leak out of scope.
+        job = await _queue_job(
+            db, player, total=3, period_start=NOW - timedelta(days=1, hours=12)
+        )
+
+    await _run_until_idle(db_sessionmaker)
+
+    async with db_sessionmaker() as db:
+        job = await db.get(Job, job.id)
+        assert job.status == "done"
+        assert job.progress == 2
+        out_of_scope = await db.scalar(
+            select(Game).where(Game.lichess_id == "engine0002")
+        )
+        assert out_of_scope.raw_analysis_processed is False
 
 
 async def test_midjob_crash_keeps_committed_games(db_sessionmaker, monkeypatch):

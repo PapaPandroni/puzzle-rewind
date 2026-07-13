@@ -292,14 +292,31 @@ async def _sync_player_games(
     return None
 
 
-async def _ensure_job(db: AsyncSession, player: Player) -> Job | None:
+async def _ensure_job(
+    db: AsyncSession, player: Player, period_start: datetime | None
+) -> Job | None:
     """Return the player's pending analysis job, creating one if unprocessed
-    games exist (§14.1). At most one queued/running job per player; `total` is
-    capped per search, so repeat searches drain a larger backlog chunk by
-    chunk with no scheduler. Budget fuses are checked by the worker, never
-    here (single enforcement point) — with a spent budget the job simply
-    fails within seconds and the banner shows the honest copy.
+    games exist *within the searched window* (§14.1). At most one
+    queued/running job per player; `total` is capped per search, so repeat
+    searches drain a larger in-window backlog chunk by chunk with no
+    scheduler. Budget fuses are checked by the worker, never here (single
+    enforcement point) — with a spent budget the job simply fails within
+    seconds and the banner shows the honest copy.
     """
+    # Backlog check FIRST, pending check second — the order is load-bearing:
+    # a search whose window has no unprocessed games must get no job (and no
+    # banner), even while a job from another search is still pending. The
+    # banner only ever promises puzzles the current search could show.
+    backlog_query = (
+        select(func.count())
+        .select_from(Game)
+        .where(Game.player_id == player.id, Game.raw_analysis_processed == false())
+    )
+    if period_start is not None:
+        backlog_query = backlog_query.where(Game.played_at >= period_start)
+    backlog = await db.scalar(backlog_query)
+    if not backlog:
+        return None
     pending = await db.scalar(
         select(Job)
         .where(Job.player_id == player.id, Job.status.in_(("queued", "running")))
@@ -307,16 +324,13 @@ async def _ensure_job(db: AsyncSession, player: Player) -> Job | None:
         .limit(1)
     )
     if pending is not None:
+        # May be scoped to a different window; still returned to keep the
+        # one-job-per-player invariant. Self-healing: when it finishes, the
+        # next search queues a correctly scoped job for the remainder.
         return pending
-    backlog = await db.scalar(
-        select(func.count())
-        .select_from(Game)
-        .where(Game.player_id == player.id, Game.raw_analysis_processed == false())
-    )
-    if not backlog:
-        return None
     job = Job(
         player_id=player.id,
+        period_start=period_start,
         total=min(backlog, settings.max_engine_games_per_search),
         created_at=_utcnow(),
     )
@@ -383,10 +397,10 @@ async def get_player_puzzles(
         except LichessRateLimited:
             raise HTTPException(status_code=503, detail="lichess_rate_limited") from None
 
-    # Queue engine analysis for any unprocessed games — checked even on
-    # cache-fresh hits, so a >40-game backlog drains across searches and a
-    # budget-failed job gets re-queued the next day.
-    job = await _ensure_job(db, player)
+    # Queue engine analysis for unprocessed games in the searched window —
+    # checked even on cache-fresh hits, so a >40-game backlog drains across
+    # searches and a budget-failed job gets re-queued the next day.
+    job = await _ensure_job(db, player, period_start)
     job_status = JobStatus.model_validate(job) if job is not None else None
 
     games_query = select(Game).where(Game.player_id == player.id).options(selectinload(Game.puzzles))

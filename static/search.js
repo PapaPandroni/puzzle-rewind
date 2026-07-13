@@ -173,7 +173,7 @@ export async function runSearch(username) {
     if (data.puzzles.length === 0) {
       if (data.reason === "analysis_pending") {
         // Not a dead end: the engine is working — banner below shows progress.
-        state.notice = `No solvable puzzles yet — analyzing ${data.job ? data.job.total : "their"} recent games with our own engine. They'll appear when it finishes.`;
+        state.notice = `Looks like Lichess hasn't analyzed these games — we're running ${data.job ? data.job.total : "their"} games through our own engine now. Puzzles will appear here when it finishes.`;
       } else if (data.reason === "no_games") {
         state.error = "This player has no games on Lichess yet — play some games and come back!";
       } else if (data.reason === "no_games_in_period") {

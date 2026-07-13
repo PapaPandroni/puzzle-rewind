@@ -142,13 +142,18 @@ async def service_one_game(sessionmaker: async_sessionmaker[AsyncSession]) -> bo
 
             game = None
             if job.progress < job.total:
-                game = await db.scalar(
+                game_query = (
                     select(Game)
                     .where(Game.player_id == job.player_id)
                     .where(Game.raw_analysis_processed == false())
                     .order_by(Game.played_at.desc())
                     .limit(1)
                 )
+                if job.period_start is not None:
+                    # Scoped job (§14.1): only games the search that queued
+                    # it can display. NULL scope = whole pool.
+                    game_query = game_query.where(Game.played_at >= job.period_start)
+                game = await db.scalar(game_query)
             if game is None:
                 job.status = "done"
                 await db.commit()

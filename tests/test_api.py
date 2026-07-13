@@ -478,6 +478,7 @@ async def test_period_with_no_games_in_window_returns_reason(client, monkeypatch
     body = resp.json()
     assert body["puzzles"] == []
     assert body["reason"] == "no_games_in_period"
+    assert body["job"] is None
 
 
 @pytest.mark.asyncio
@@ -724,3 +725,81 @@ async def test_zero_move_games_are_not_stored_or_queued(client, monkeypatch, per
     body = resp.json()
     assert body["games_scanned"] == 0
     assert body["job"] is None
+
+
+@pytest.mark.asyncio
+async def test_job_none_when_unprocessed_backlog_outside_period(
+    client, monkeypatch, peremil_games
+):
+    # Bug regression: an out-of-window backlog must not attach an "analyzing"
+    # job to a "no games in this period" response — the engine would analyze
+    # games the search can never display.
+    games = _at_days_ago(
+        [_strip_analysis(g, f"oldunan{i:04d}") for i, g in enumerate(peremil_games[:2])],
+        [("oldunan001", 100), ("oldunan002", 200)],
+    )
+    monkeypatch.setattr("app.routers.puzzles.fetch_games", _make_fake_fetch_games(games))
+
+    resp = await client.get("/api/players/peremil/puzzles", params={"period": "day"})
+    body = resp.json()
+    assert body["puzzles"] == []
+    assert body["reason"] == "no_games_in_period"
+    assert body["job"] is None
+
+
+@pytest.mark.asyncio
+async def test_pending_job_not_returned_for_empty_period(
+    client, db_sessionmaker, monkeypatch, peremil_games
+):
+    games = _at_days_ago(
+        [_strip_analysis(g, f"oldunan{i:04d}") for i, g in enumerate(peremil_games[:2])],
+        [("oldunan001", 100), ("oldunan002", 200)],
+    )
+    monkeypatch.setattr("app.routers.puzzles.fetch_games", _make_fake_fetch_games(games))
+
+    # last20 covers the whole pool: a job is queued for the backlog.
+    first = (await client.get("/api/players/peremil/puzzles")).json()
+    assert first["job"] is not None
+
+    # A window with no backlog gets no job, even while that one is pending.
+    second = (await client.get("/api/players/peremil/puzzles", params={"period": "day"})).json()
+    assert second["reason"] == "no_games_in_period"
+    assert second["job"] is None
+
+    from sqlalchemy import select
+
+    from app.models import Job
+
+    async with db_sessionmaker() as db:
+        job = await db.scalar(select(Job).where(Job.id == first["job"]["id"]))
+        assert job.status == "queued"  # still pending — just not shown
+
+
+@pytest.mark.asyncio
+async def test_job_total_counts_only_in_period_backlog(
+    client, db_sessionmaker, monkeypatch, peremil_games
+):
+    games = _at_days_ago(
+        [_strip_analysis(g, f"unan{i:07d}") for i, g in enumerate(peremil_games)],
+        [
+            ("inmonth001", 5),
+            ("inmonth002", 10),
+            ("old0000001", 100),
+            ("old0000002", 200),
+            ("old0000003", 300),
+        ],
+    )
+    monkeypatch.setattr("app.routers.puzzles.fetch_games", _make_fake_fetch_games(games))
+
+    resp = await client.get("/api/players/peremil/puzzles", params={"period": "month"})
+    body = resp.json()
+    assert body["reason"] == "analysis_pending"
+    assert body["job"]["total"] == 2  # only the in-month backlog
+
+    from sqlalchemy import select
+
+    from app.models import Job
+
+    async with db_sessionmaker() as db:
+        job = await db.scalar(select(Job).where(Job.id == body["job"]["id"]))
+        assert job.period_start is not None

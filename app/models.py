@@ -81,16 +81,21 @@ class Puzzle(Base):
 class Job(Base):
     """One background Stockfish analysis job per player (§14.1).
 
-    No params column: the work set is defined by DB state — the player's
-    unprocessed games (raw_analysis_processed=False), newest first, up to
-    `total`. Puzzles are always stored at min_win_drop_stored, so the user's
-    threshold never matters at analysis time.
+    No params blob: the work set is defined by DB state — the player's
+    unprocessed games (raw_analysis_processed=False) within `period_start`
+    (NULL = whole pool), newest first, up to `total`. Puzzles are always
+    stored at min_win_drop_stored, so the user's threshold never matters at
+    analysis time.
     """
 
     __tablename__ = "jobs"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     player_id: Mapped[int] = mapped_column(ForeignKey("players.id"), index=True)
+    # Start of the searched window this job serves; NULL = whole accumulated
+    # pool (period "last20", and jobs created before this column existed).
+    # Naive UTC like the rest.
+    period_start: Mapped[datetime | None]
     status: Mapped[str] = mapped_column(
         String(10), default="queued", index=True
     )  # queued | running | done | failed

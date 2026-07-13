@@ -86,6 +86,6 @@ Full details, data model, and API design are in [`DESIGN.md`](DESIGN.md).
 
 ## Known limitations
 
-- Games without Lichess analysis are analyzed by our own Stockfish in the background: the first search on a rarely-analyzed account shows a progress banner instead of instant puzzles, and engine work is budgeted (≤40 games per search, 150/day globally, 60/day per player) — big histories fill in across repeat searches and days.
+- Games without Lichess analysis are analyzed by our own Stockfish in the background: the first search on a rarely-analyzed account shows a progress banner instead of instant puzzles, and engine work is budgeted (≤40 games per search, 150/day globally, 60/day per player) — big histories fill in across repeat searches and days. Analysis is scoped to the time period you searched, so games outside every window you've looked at stay unanalyzed until a search covers them.
 - Solution checking accepts only the engine's top move (mates are always accepted as correct even if not the top line); other equally good alternatives aren't recognized yet.
 - Difficulty threshold presets are calibrated against a handful of real accounts and will keep drifting as more usage data comes in — see `# TUNING` markers in `app/config.py`.

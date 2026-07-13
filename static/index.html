@@ -69,7 +69,15 @@
           "name": "Why don't I see puzzles from all my games?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Right now Puzzle Rewind only looks at games Lichess has already run its own computer analysis on — that's how blunders get detected today. Server-side analysis, so every game works whether or not Lichess has analyzed it, is a planned upcoming feature."
+            "text": "Games that Lichess has already analyzed turn into puzzles instantly. For the rest, we run our own Stockfish engine in the background — up to 40 games per search, within a fair daily budget that keeps this free service free. Those puzzles appear as soon as the engine finishes; if a big backlog hits the daily limit, search again tomorrow and it picks up where it left off."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Why does analysis take a while?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Every search shares one Stockfish engine that works through games one at a time, and as a free service we cap how much analysis runs each day. A progress banner shows how far along your games are, and puzzles appear the moment they're done — keep solving in the meantime. If you'd like analysis to get faster, the little coffee button in the corner genuinely helps pay for more engine time."
           }
         },
         {
@@ -116,10 +124,17 @@
   your win probability. Each blunder becomes a puzzle: find the move you should have
   played.</p>
   <h3>Why don't I see puzzles from all my games?</h3>
-  <p>Right now Puzzle Rewind only looks at games Lichess has already run its own
-  computer analysis on — that's how blunders get detected today. Server-side
-  analysis, so every game works whether or not Lichess has analyzed it, is a planned
-  upcoming feature.</p>
+  <p>Games that Lichess has already analyzed turn into puzzles instantly. For the
+  rest, we run our own Stockfish engine in the background — up to 40 games per
+  search, within a fair daily budget that keeps this free service free. Those
+  puzzles appear as soon as the engine finishes; if a big backlog hits the daily
+  limit, search again tomorrow and it picks up where it left off.</p>
+  <h3>Why does analysis take a while?</h3>
+  <p>Every search shares one Stockfish engine that works through games one at a
+  time, and as a free service we cap how much analysis runs each day. A progress
+  banner shows how far along your games are, and puzzles appear the moment they're
+  done — keep solving in the meantime. If you'd like analysis to get faster, the
+  little coffee button in the corner genuinely helps pay for more engine time.</p>
   <h3>Is it free?</h3>
   <p>Yes, completely free and open source.</p>
   <h3>Does it work for any Lichess player?</h3>
