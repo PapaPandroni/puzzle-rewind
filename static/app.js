@@ -19,6 +19,7 @@ export const state = {
   abort: null, // AbortController for the in-flight search, if any
   error: null,
   notice: null, // neutral (non-error) status line, e.g. "Search cancelled."
+  job: null, // pending engine-analysis job from the last search response (§14.1)
   cg: null,
 };
 

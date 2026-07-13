@@ -223,6 +223,29 @@ h2 {
   overflow: hidden;
 }
 
+/* --- Engine-analysis job banner (§14.1) --- */
+
+.job-banner {
+  margin: 12px auto 0;
+  max-width: 560px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  color: var(--text-dim);
+  font-size: 0.9rem;
+  text-align: center;
+}
+
+.job-banner p {
+  margin: 0;
+}
+
+.job-banner .link-btn {
+  margin-top: 6px;
+  color: var(--accent);
+}
+
 .progress-fill {
   width: 35%;
   height: 100%;

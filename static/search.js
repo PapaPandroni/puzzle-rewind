@@ -1,5 +1,6 @@
 import { api } from "./api.js";
 import { appEl, el, state } from "./app.js";
+import { jobBannerEl, startJobPolling, stopJobPolling } from "./banner.js";
 import { renderPuzzle } from "./puzzle.js";
 
 // Must stay in sync with app/config.py Settings.thresholds.
@@ -88,6 +89,12 @@ export function renderSearch() {
   `);
   appEl.appendChild(wrap);
 
+  const banner = jobBannerEl();
+  if (banner) {
+    wrap.appendChild(banner);
+    startJobPolling();
+  }
+
   // Set the value via the DOM property (not template interpolation) so quotes
   // in the field can't break the attribute, and live-sync it into state so
   // option-button re-renders never lose what's been typed.
@@ -138,15 +145,21 @@ export function renderSearch() {
     const username = wrap.querySelector("#username-input").value.trim();
     if (!username) return;
     state.username = username;
-    await search(username);
+    await runSearch(username);
   });
 }
 
-async function search(username) {
+// Exported so the banner's [Refresh puzzles] button can re-run the search
+// (which is instant on a fresh cache and picks up new engine puzzles).
+export async function runSearch(username) {
   if (state.loading) return; // one search at a time
   state.loading = true;
   state.error = null;
   state.notice = null;
+  // A new search means a new (or refreshed) job context; the response below
+  // carries the current one, if any.
+  stopJobPolling();
+  state.job = null;
   state.abort = new AbortController();
   renderSearch();
   try {
@@ -156,12 +169,15 @@ async function search(username) {
       signal: state.abort.signal,
     });
     state.loading = false;
+    state.job = data.job ?? null;
     if (data.puzzles.length === 0) {
-      if (data.reason === "no_analyzed_games") {
-        state.error =
-          "No analyzed games found for this player yet. Puzzles come from games Lichess has computer-analyzed — analyze some games on Lichess first, then come back.";
+      if (data.reason === "analysis_pending") {
+        // Not a dead end: the engine is working — banner below shows progress.
+        state.notice = `No solvable puzzles yet — analyzing ${data.job ? data.job.total : "their"} recent games with our own engine. They'll appear when it finishes.`;
+      } else if (data.reason === "no_games") {
+        state.error = "This player has no games on Lichess yet — play some games and come back!";
       } else if (data.reason === "no_games_in_period") {
-        state.error = "No analyzed games found in this period — try a longer one.";
+        state.error = "No games found in this period — try a longer one.";
       } else {
         state.error = "No puzzles found for this player at the current difficulty. Try a lower threshold.";
       }
