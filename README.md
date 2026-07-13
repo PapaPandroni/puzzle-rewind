@@ -1,6 +1,6 @@
 # Puzzle Rewind
 
-Turn *your own* Lichess games into an endless puzzle stream. Enter any Lichess username and the app mines that player's recently analyzed games for blunders — the puzzle is the position just before the mistake, and the solution is the move they should have played. Game review, but gamified and infinite.
+Turn *your own* Lichess games into an endless puzzle stream. Enter any Lichess username and the app mines that player's recent games for blunders — using Lichess's server analysis where it exists and its own background Stockfish where it doesn't. The puzzle is the position just before the mistake, and the solution is the move they should have played. Game review, but gamified and infinite.
 
 No accounts, no login, no server-side session state — puzzle sessions are entirely stateless.
 
@@ -65,7 +65,7 @@ Key settings:
 uv run pytest
 ```
 
-Tests run fully offline against committed Lichess API fixtures in `tests/fixtures/`.
+Tests run fully offline against committed Lichess API fixtures in `tests/fixtures/`. The handful of engine tests additionally need a local Stockfish binary (`brew install stockfish`) and are auto-skipped when it's absent.
 
 ### Building the container
 

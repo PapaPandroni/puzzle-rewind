@@ -222,7 +222,7 @@ Store as `Puzzle(kind="brilliant")` — the column already exists; puzzle positi
 
 ## 4. Cross-cutting concerns
 
-- **Migrations:** three total (Phase 2: `players.history_fetched_until`; Phase 3: `jobs` table + `games.eval_source` + `games.moves_san` — one migration). Each tested against a fresh SQLite upgrade and deployed to Railway where `alembic upgrade head` runs on boot — zero manual prod steps, same as Phase 1.
+- **Migrations:** three total (Phase 2: `players.history_fetched_until`; Phase 3: `jobs` table + `games.eval_source` + `games.moves_san` — one migration, which as built also carries `games.analysis_json` and `games.analyzed_at`, see §3 implementation note). Each tested against a fresh SQLite upgrade and deployed to Railway where `alembic upgrade head` runs on boot — zero manual prod steps, same as Phase 1.
 - **API compatibility:** every change is additive with defaults preserving Phase 1 behavior (`move_index=0`, `period=last20`, `kind=blunder`). The one deliberate exception is stripping the full variation from *mid-line* attempt responses (§2.1 step 4), which no existing client sends.
 - **Lichess etiquette (§16):** period fetches are bigger but still one-request-at-a-time, identified User-Agent, no parallelization, 429 → clean 503. The 300/500 caps exist precisely to stay polite. `LICHESS_TOKEN` already raises the shared ceiling.
 - **`static/app.js` growth:** it's 311 lines now; Phase 2+3 roughly doubles it. Stay vanilla (locked stack), but split into ES modules (`search.js`, `puzzle.js`, `api.js`) served as-is — still no build step.
