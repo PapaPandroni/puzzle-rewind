@@ -340,6 +340,25 @@ def _effective_threshold(preset: Preset, threshold: int | None, game_player_rati
     return settings.thresholds[preset]
 
 
+async def _get_or_create_player(db: AsyncSession, username: str) -> Player:
+    """Get-or-create made race-safe: flush (not commit) so a lookup of a
+    nonexistent Lichess user rolls the row back with the failed request."""
+    player = await db.scalar(select(Player).where(Player.username == username))
+    if player is not None:
+        return player
+    player = Player(username=username)
+    db.add(player)
+    try:
+        await db.flush()
+    except IntegrityError:
+        # Lost a concurrent first-search race: both requests missed the SELECT
+        # and raced to INSERT (ix_players_username). Roll back our insert and
+        # adopt the winner's committed row.
+        await db.rollback()
+        player = await db.scalar(select(Player).where(Player.username == username))
+    return player
+
+
 @router.get("/api/players/{username}/puzzles", response_model=PuzzleSetResponse)
 @limiter.limit("20/minute")
 async def get_player_puzzles(
@@ -354,11 +373,7 @@ async def get_player_puzzles(
 ):
     username = username.lower()
 
-    player = await db.scalar(select(Player).where(Player.username == username))
-    if player is None:
-        player = Player(username=username)
-        db.add(player)
-        await db.flush()
+    player = await _get_or_create_player(db, username)
 
     cache_is_fresh = player.last_fetched_at is not None and (
         utcnow() - player.last_fetched_at < timedelta(seconds=settings.cache_ttl_seconds)

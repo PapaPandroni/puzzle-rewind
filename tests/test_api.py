@@ -247,6 +247,46 @@ async def test_no_games_returns_empty_with_reason(client, monkeypatch):
     assert body["job"] is None
 
 
+async def test_player_get_or_create_survives_insert_race(db_sessionmaker):
+    # Two first-time searches for the same player can both miss the SELECT and
+    # race to INSERT (seen in prod as a 500 on ix_players_username). The shared
+    # test connection can't stage two overlapping transactions, so simulate the
+    # loser directly: the row already exists, but its first SELECT misses.
+    from app.models import Player
+    from app.routers.puzzles import _get_or_create_player
+
+    async with db_sessionmaker() as session:
+        session.add(Player(username="racer"))
+        await session.commit()
+
+    async with db_sessionmaker() as session:
+        real_scalar = session.scalar
+        calls = 0
+
+        async def scalar_first_select_misses(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return None
+            return await real_scalar(*args, **kwargs)
+
+        session.scalar = scalar_first_select_misses
+        player = await _get_or_create_player(session, "racer")
+
+    assert player is not None
+    assert player.username == "racer"
+    assert calls == 2  # miss, IntegrityError, then re-select adopted the row
+
+    # And exactly one row exists.
+    async with db_sessionmaker() as session:
+        from sqlalchemy import func, select
+
+        count = await session.scalar(
+            select(func.count()).select_from(Player).where(Player.username == "racer")
+        )
+    assert count == 1
+
+
 @pytest.mark.asyncio
 async def test_invalid_username_returns_422(client):
     resp = await client.get("/api/players/a/puzzles")  # too short (min 2 chars)
