@@ -21,6 +21,7 @@ export const state = {
   error: null,
   notice: null, // neutral (non-error) status line, e.g. "Search cancelled."
   job: null, // pending engine-analysis job from the last search response (§14.1)
+  jobUsername: null, // player `job` belongs to — NOT `username`, which live-syncs with the input per keystroke
   cg: null,
 };
 

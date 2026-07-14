@@ -170,6 +170,7 @@ export async function runSearch(username) {
     });
     state.loading = false;
     state.job = data.job ?? null;
+    state.jobUsername = data.username;
     if (data.puzzles.length === 0) {
       if (data.reason === "analysis_pending") {
         // Not a dead end: the engine is working — banner below shows progress.

@@ -47,7 +47,9 @@ function fillBanner(node) {
   const btn = node.querySelector("#refresh-puzzles-btn");
   if (btn) {
     btn.addEventListener("click", () => {
-      runSearch(state.username);
+      // The job's player, not state.username: the latter live-syncs with the
+      // search input, so a half-typed new name must not hijack the refresh.
+      runSearch(state.jobUsername ?? state.username);
     });
   }
 }
