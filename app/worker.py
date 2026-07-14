@@ -201,21 +201,29 @@ async def service_one_game(sessionmaker: async_sessionmaker[AsyncSession]) -> bo
             if job.progress >= job.total:
                 job.status = "done"
             await db.commit()
-        except (chess.engine.EngineTerminatedError, chess.engine.EngineError) as exc:
-            logger.error("worker: engine failure in job %s: %s", job_id, exc)
-            await engine_handle.quit()  # drop the broken process; next use respawns
-            await db.rollback()
-            job = await db.get(Job, job_id)
-            if job is not None:
-                await _fail_job(db, job, "engine_error")
         except asyncio.CancelledError:
             raise  # lifespan shutdown; startup stale-reset re-queues this job
-        except Exception:
-            logger.exception("worker: job %s crashed", job_id)
+        except Exception as exc:
+            # FileNotFoundError is the missing-binary spawn failure — engine-
+            # classified even though popen_uci raises it as a plain OSError.
+            engine_failure = isinstance(
+                exc,
+                (chess.engine.EngineTerminatedError, chess.engine.EngineError, FileNotFoundError),
+            )
+            if engine_failure:
+                logger.error("worker: engine failure in job %s: %s", job_id, exc)
+                try:
+                    await engine_handle.quit()  # drop the broken process; next use respawns
+                except Exception:
+                    # The handle already forgot the process; failing to quit a
+                    # dead engine must not skip failing the job below.
+                    logger.warning("worker: quitting broken engine failed", exc_info=True)
+            else:
+                logger.exception("worker: job %s crashed", job_id)
             await db.rollback()
             job = await db.get(Job, job_id)
             if job is not None:
-                await _fail_job(db, job, "internal_error")
+                await _fail_job(db, job, "engine_error" if engine_failure else "internal_error")
         return True
 
 

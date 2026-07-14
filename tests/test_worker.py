@@ -249,6 +249,48 @@ async def test_engine_failure_fails_job_and_leaves_games_unprocessed(
         assert len(unprocessed) == 1  # stays queued for the next search's job
 
 
+async def test_engine_failure_still_fails_job_when_quit_raises(
+    db_sessionmaker, monkeypatch
+):
+    # Quitting an already-dead engine can itself raise; the job must still be
+    # failed — otherwise it stays pending and the worker retries it forever,
+    # with no daily fuse to stop it (only completed games count against it).
+    _patch_extract(monkeypatch, [chess.engine.EngineTerminatedError("engine died")])
+
+    async def broken_quit():
+        raise chess.engine.EngineTerminatedError("engine event loop dead")
+
+    monkeypatch.setattr("app.worker.engine_handle.quit", broken_quit)
+
+    async with db_sessionmaker() as db:
+        player = await _seed(db, 1)
+        job = await _queue_job(db, player, total=1)
+
+    await _run_until_idle(db_sessionmaker)
+
+    async with db_sessionmaker() as db:
+        job = await db.get(Job, job.id)
+        assert job.status == "failed"
+        assert job.error == "engine_error"
+
+
+async def test_missing_binary_classified_as_engine_error(db_sessionmaker, monkeypatch):
+    # popen_uci raises FileNotFoundError (a plain OSError, not an EngineError)
+    # when the stockfish binary is absent — still an engine failure to the user.
+    _patch_extract(monkeypatch, [FileNotFoundError("stockfish not found")])
+
+    async with db_sessionmaker() as db:
+        player = await _seed(db, 1)
+        job = await _queue_job(db, player, total=1)
+
+    await _run_until_idle(db_sessionmaker)
+
+    async with db_sessionmaker() as db:
+        job = await db.get(Job, job.id)
+        assert job.status == "failed"
+        assert job.error == "engine_error"
+
+
 async def test_unparseable_moves_skipped_job_continues(db_sessionmaker, monkeypatch):
     _patch_extract(
         monkeypatch,
