@@ -23,6 +23,7 @@ def upgrade() -> None:
     op.create_table('jobs',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('player_id', sa.Integer(), nullable=False),
+    sa.Column('period_start', sa.DateTime(), nullable=True),
     sa.Column('status', sa.String(length=10), nullable=False),
     sa.Column('progress', sa.Integer(), nullable=False),
     sa.Column('total', sa.Integer(), nullable=False),

@@ -93,8 +93,7 @@ class Job(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     player_id: Mapped[int] = mapped_column(ForeignKey("players.id"), index=True)
     # Start of the searched window this job serves; NULL = whole accumulated
-    # pool (period "last20", and jobs created before this column existed).
-    # Naive UTC like the rest.
+    # pool (period "last20"). Naive UTC like the rest.
     period_start: Mapped[datetime | None]
     status: Mapped[str] = mapped_column(
         String(10), default="queued", index=True
