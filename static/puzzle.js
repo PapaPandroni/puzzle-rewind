@@ -125,13 +125,22 @@ function syncBoardFromPosition({ unlock }) {
 // Step-through replay of a solution line. Renders on a throwaway Chess instance
 // so it never touches the module-level `position` (the board is display-only
 // here), letting the user scrub the line at their own pace with Back/Forward.
-function mountLineReplay(container, startFen, sanMoves, startPly) {
+// renderOnMount: false mounts only the controls and leaves the board as-is
+// until the first click — for when the current board (e.g. the user's own
+// divergent mate) must stay visible rather than jump to a line position.
+function mountLineReplay(container, startFen, sanMoves, startPly, { renderOnMount = true } = {}) {
   const total = sanMoves.length;
   let ply = Math.max(0, Math.min(startPly, total));
 
   const renderAt = (p) => {
     const chess = new Chess(startFen);
-    for (let i = 0; i < p; i++) chess.move(sanMoves[i]);
+    for (let i = 0; i < p; i++) {
+      try {
+        chess.move(sanMoves[i]);
+      } catch {
+        break; // defensive: show up to the last parseable move rather than throw
+      }
+    }
     const last = chess.history({ verbose: true }).at(-1);
     state.cg.set({
       fen: chess.fen(),
@@ -152,11 +161,14 @@ function mountLineReplay(container, startFen, sanMoves, startPly) {
   const fwdBtn = container.querySelector('[data-replay="fwd"]');
   const counter = container.querySelector(".replay-counter");
 
-  const update = () => {
-    renderAt(ply);
+  const updateControls = () => {
     counter.textContent = `move ${ply} of ${total}`;
     backBtn.disabled = ply === 0;
     fwdBtn.disabled = ply === total;
+  };
+  const update = () => {
+    renderAt(ply);
+    updateControls();
   };
   backBtn.addEventListener("click", () => {
     if (ply > 0) ply--, update();
@@ -164,7 +176,8 @@ function mountLineReplay(container, startFen, sanMoves, startPly) {
   fwdBtn.addEventListener("click", () => {
     if (ply < total) ply++, update();
   });
-  update();
+  updateControls();
+  if (renderOnMount) renderAt(ply);
 }
 
 async function onUserMove(orig, dest) {
@@ -289,13 +302,15 @@ function showLineResult(result, moveUci) {
       `;
     } else {
       // Divergent checkmate: the stored line no longer applies, the board is mate.
-      // Offer the engine's line for review (Back walks it from the start).
+      // Offer the engine's line for review, but keep the user's mate on the
+      // board until they actually step — mounting must not repaint it away.
       if (result.variation_san.length) {
         mountLineReplay(
           document.getElementById("replay"),
           puzzle.fen,
           result.variation_san,
           result.variation_san.length,
+          { renderOnMount: false },
         );
       }
       feedbackEl.innerHTML = `
