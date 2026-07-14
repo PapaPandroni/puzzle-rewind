@@ -5,6 +5,7 @@ from typing import Annotated, Literal
 import chess
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
 from sqlalchemy import false, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -317,12 +318,7 @@ async def _ensure_job(
     backlog = await db.scalar(backlog_query)
     if not backlog:
         return None
-    pending = await db.scalar(
-        select(Job)
-        .where(Job.player_id == player.id, Job.status.in_(("queued", "running")))
-        .order_by(Job.id.desc())
-        .limit(1)
-    )
+    pending = await _pending_job(db, player.id)
     if pending is not None:
         # May be scoped to a different window; still returned to keep the
         # one-job-per-player invariant. Self-healing: when it finishes, the
@@ -335,8 +331,23 @@ async def _ensure_job(
         created_at=_utcnow(),
     )
     db.add(job)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # Lost a concurrent-search race: the partial unique index (one pending
+        # job per player) rejected our insert — adopt the winner's job.
+        await db.rollback()
+        return await _pending_job(db, player.id)
     return job
+
+
+async def _pending_job(db: AsyncSession, player_id: int) -> Job | None:
+    return await db.scalar(
+        select(Job)
+        .where(Job.player_id == player_id, Job.status.in_(("queued", "running")))
+        .order_by(Job.id.desc())
+        .limit(1)
+    )
 
 
 def _effective_threshold(preset: Preset, threshold: int | None, game_player_rating: int) -> int:

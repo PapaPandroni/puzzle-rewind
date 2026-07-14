@@ -34,6 +34,13 @@ def upgrade() -> None:
     )
     op.create_index(op.f('ix_jobs_player_id'), 'jobs', ['player_id'], unique=False)
     op.create_index(op.f('ix_jobs_status'), 'jobs', ['status'], unique=False)
+    # One pending job per player (partial/filtered unique index — supported by
+    # both SQLite and Postgres): backs _ensure_job's check-then-insert.
+    op.create_index(
+        'uq_jobs_one_pending_per_player', 'jobs', ['player_id'], unique=True,
+        sqlite_where=sa.text("status IN ('queued','running')"),
+        postgresql_where=sa.text("status IN ('queued','running')"),
+    )
     # server_default backfills existing rows in-place on both SQLite (ADD
     # COLUMN DEFAULT) and Postgres (PG11+ fast default, no table rewrite).
     op.add_column('games', sa.Column('eval_source', sa.String(length=10), server_default='lichess', nullable=False))
@@ -48,6 +55,7 @@ def downgrade() -> None:
     op.drop_column('games', 'analysis_json')
     op.drop_column('games', 'moves_san')
     op.drop_column('games', 'eval_source')
+    op.drop_index('uq_jobs_one_pending_per_player', table_name='jobs')
     op.drop_index(op.f('ix_jobs_status'), table_name='jobs')
     op.drop_index(op.f('ix_jobs_player_id'), table_name='jobs')
     op.drop_table('jobs')

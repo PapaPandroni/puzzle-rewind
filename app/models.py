@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import ForeignKey, Index, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -102,3 +102,15 @@ class Job(Base):
     total: Mapped[int] = mapped_column(default=0)  # games this job will analyze
     error: Mapped[str | None] = mapped_column(Text)  # machine-readable, e.g. "daily_budget_reached"
     created_at: Mapped[datetime]
+
+    __table_args__ = (
+        # One pending job per player — the DB-level form of the invariant
+        # _ensure_job relies on; closes its check-then-insert race.
+        Index(
+            "uq_jobs_one_pending_per_player",
+            "player_id",
+            unique=True,
+            sqlite_where=text("status IN ('queued','running')"),
+            postgresql_where=text("status IN ('queued','running')"),
+        ),
+    )

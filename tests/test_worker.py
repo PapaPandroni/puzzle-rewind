@@ -386,6 +386,26 @@ async def test_player_fuse_is_per_player(db_sessionmaker, monkeypatch):
         assert other_job.status == "done"
 
 
+async def test_second_pending_job_for_player_rejected_by_db(db_sessionmaker):
+    # The partial unique index enforces at most one queued/running job per
+    # player — the invariant _ensure_job's check-then-insert relies on.
+    from sqlalchemy.exc import IntegrityError
+
+    async with db_sessionmaker() as db:
+        player = await _seed(db, 0)
+        await _queue_job(db, player, total=1)
+        # Terminal statuses don't count against the index.
+        done = Job(player_id=player.id, status="done", total=1, created_at=_utcnow())
+        db.add(done)
+        await db.commit()
+
+        dup = Job(player_id=player.id, status="queued", total=1, created_at=_utcnow())
+        db.add(dup)
+        with pytest.raises(IntegrityError):
+            await db.commit()
+        await db.rollback()
+
+
 async def test_reset_stale_jobs_requeues_running(db_sessionmaker):
     async with db_sessionmaker() as db:
         player = await _seed(db, 0)
