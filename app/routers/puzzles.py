@@ -19,7 +19,7 @@ from app.analysis import (
     variation_move_uci,
 )
 from app.config import settings
-from app.database import get_db
+from app.database import get_db, utcnow
 from app.lichess import LichessRateLimited, LichessUserNotFound, fetch_games
 from app.models import Game, Job, Player, Puzzle
 from app.rate_limit import limiter
@@ -45,19 +45,13 @@ _PERIOD_LENGTHS: dict[str, timedelta] = {
 }
 
 
-def _utcnow() -> datetime:
-    # Stored naive (UTC by convention) — SQLite silently drops tzinfo on read, so
-    # comparisons must stay naive on both sides regardless of backend.
-    return datetime.now(UTC).replace(tzinfo=None)
-
-
 def _period_start(period: Period) -> datetime | None:
     """Start of the requested window; None for last20 (whole accumulated pool)."""
     if period == "last20":
         return None
     if period == "all":
         return datetime(1970, 1, 1)
-    return _utcnow() - _PERIOD_LENGTHS[period]
+    return utcnow() - _PERIOD_LENGTHS[period]
 
 
 def _period_cap(period: Period) -> int:
@@ -122,22 +116,7 @@ async def _persist_game(db: AsyncSession, player: Player, username: str, game: d
     await db.flush()  # assign game_row.id
 
     for puzzle_data in extract_puzzles(game, username, settings.min_win_drop_stored):
-        db.add(
-            Puzzle(
-                game_id=game_row.id,
-                ply=puzzle_data["ply"],
-                fen=puzzle_data["fen"],
-                side_to_move=puzzle_data["side_to_move"],
-                solution_uci=puzzle_data["solution_uci"],
-                solution_san=puzzle_data["solution_san"],
-                played_uci=puzzle_data["played_uci"],
-                played_san=puzzle_data["played_san"],
-                variation_san=" ".join(puzzle_data["variation_san"]),
-                win_drop=puzzle_data["win_drop"],
-                eval_before_cp=puzzle_data["eval_before_cp"],
-                eval_after_cp=puzzle_data["eval_after_cp"],
-            )
-        )
+        db.add(Puzzle.from_extraction(game_row.id, puzzle_data))
     return True
 
 
@@ -250,7 +229,7 @@ async def _sync_player_games(
             # makes the overlap cheap) and heals it.
             player.history_fetched_until = oldest_received
 
-        player.last_fetched_at = _utcnow()
+        player.last_fetched_at = utcnow()
 
     if backfill_start is not None:
         oldest = await db.scalar(
@@ -328,7 +307,7 @@ async def _ensure_job(
         player_id=player.id,
         period_start=period_start,
         total=min(backlog, settings.max_engine_games_per_search),
-        created_at=_utcnow(),
+        created_at=utcnow(),
     )
     db.add(job)
     try:
@@ -382,7 +361,7 @@ async def get_player_puzzles(
         await db.flush()
 
     cache_is_fresh = player.last_fetched_at is not None and (
-        _utcnow() - player.last_fetched_at < timedelta(seconds=settings.cache_ttl_seconds)
+        utcnow() - player.last_fetched_at < timedelta(seconds=settings.cache_ttl_seconds)
     )
 
     period_start = _period_start(period)

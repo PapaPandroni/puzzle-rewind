@@ -21,7 +21,7 @@ that player's job; other jobs keep being serviced.
 import asyncio
 import json
 import logging
-from datetime import UTC, datetime
+from datetime import datetime
 
 import chess.engine
 from sqlalchemy import false, func, select, update
@@ -29,19 +29,15 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analysis import extract_puzzles_for_color, find_blunder_plies_for_color
 from app.config import settings
+from app.database import utcnow
 from app.engine import analyse_game, engine_handle, refine_plies
 from app.models import Game, Job, Puzzle
 
 logger = logging.getLogger(__name__)
 
 
-def _utcnow() -> datetime:
-    # Naive UTC, same convention as app/routers/puzzles.py.
-    return datetime.now(UTC).replace(tzinfo=None)
-
-
 def _utc_midnight() -> datetime:
-    return _utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    return utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
 
 
 async def reset_stale_jobs(sessionmaker: async_sessionmaker[AsyncSession]) -> None:
@@ -172,29 +168,14 @@ async def service_one_game(sessionmaker: async_sessionmaker[AsyncSession]) -> bo
                 merged, puzzles = None, []
 
             for p in puzzles:
-                db.add(
-                    Puzzle(
-                        game_id=game.id,
-                        ply=p["ply"],
-                        fen=p["fen"],
-                        side_to_move=p["side_to_move"],
-                        solution_uci=p["solution_uci"],
-                        solution_san=p["solution_san"],
-                        played_uci=p["played_uci"],
-                        played_san=p["played_san"],
-                        variation_san=" ".join(p["variation_san"]),
-                        win_drop=p["win_drop"],
-                        eval_before_cp=p["eval_before_cp"],
-                        eval_after_cp=p["eval_after_cp"],
-                    )
-                )
+                db.add(Puzzle.from_extraction(game.id, p))
             # Flag + puzzles flip in the same commit, so a crash either loses
             # this one game entirely (retried by the next job) or lands it
             # completely — the (game_id, ply) unique constraint can never be
             # violated by re-processing. The final game also flips the job to
             # done in the same commit, so jobs never linger running-complete.
             game.raw_analysis_processed = True
-            game.analyzed_at = _utcnow()
+            game.analyzed_at = utcnow()
             if merged is not None:
                 game.analysis_json = json.dumps(merged)
             job.progress += 1

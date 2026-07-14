@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import ForeignKey, Index, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -76,6 +77,25 @@ class Puzzle(Base):
     game: Mapped["Game"] = relationship(back_populates="puzzles")
 
     __table_args__ = (UniqueConstraint("game_id", "ply"),)
+
+    @classmethod
+    def from_extraction(cls, game_id: int, data: dict[str, Any]) -> "Puzzle":
+        """Row from a build_puzzle() dict (app/analysis.py) — the single
+        mapping shared by the inline Lichess path and the engine worker."""
+        return cls(
+            game_id=game_id,
+            ply=data["ply"],
+            fen=data["fen"],
+            side_to_move=data["side_to_move"],
+            solution_uci=data["solution_uci"],
+            solution_san=data["solution_san"],
+            played_uci=data["played_uci"],
+            played_san=data["played_san"],
+            variation_san=" ".join(data["variation_san"]),
+            win_drop=data["win_drop"],
+            eval_before_cp=data["eval_before_cp"],
+            eval_after_cp=data["eval_after_cp"],
+        )
 
 
 class Job(Base):

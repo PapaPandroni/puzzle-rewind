@@ -14,9 +14,9 @@ import pytest
 from sqlalchemy import select
 
 from app.config import settings
+from app.database import utcnow
 from app.models import Game, Job, Player, Puzzle
 from app.worker import (
-    _utcnow,
     analyse_and_extract,
     games_analyzed_today,
     reset_stale_jobs,
@@ -86,7 +86,7 @@ async def _queue_job(
         status="queued",
         total=total,
         period_start=period_start,
-        created_at=_utcnow(),
+        created_at=utcnow(),
     )
     db.add(job)
     await db.commit()
@@ -324,7 +324,7 @@ async def test_global_fuse_trips_before_first_game(db_sessionmaker, monkeypatch)
         other = await _seed(db, 2, username="otheruser")
         for g in (await db.scalars(select(Game))).all():
             g.raw_analysis_processed = True
-            g.analyzed_at = _utcnow()
+            g.analyzed_at = utcnow()
         await db.commit()
         player = await _seed(db, 1)
         job = await _queue_job(db, player, total=1)
@@ -368,7 +368,7 @@ async def test_player_fuse_is_per_player(db_sessionmaker, monkeypatch):
         player = await _seed(db, 2)
         first = await db.scalar(select(Game).order_by(Game.id))
         first.raw_analysis_processed = True
-        first.analyzed_at = _utcnow()
+        first.analyzed_at = utcnow()
         await db.commit()
         job = await _queue_job(db, player, total=1)
 
@@ -395,11 +395,11 @@ async def test_second_pending_job_for_player_rejected_by_db(db_sessionmaker):
         player = await _seed(db, 0)
         await _queue_job(db, player, total=1)
         # Terminal statuses don't count against the index.
-        done = Job(player_id=player.id, status="done", total=1, created_at=_utcnow())
+        done = Job(player_id=player.id, status="done", total=1, created_at=utcnow())
         db.add(done)
         await db.commit()
 
-        dup = Job(player_id=player.id, status="queued", total=1, created_at=_utcnow())
+        dup = Job(player_id=player.id, status="queued", total=1, created_at=utcnow())
         db.add(dup)
         with pytest.raises(IntegrityError):
             await db.commit()
@@ -409,8 +409,8 @@ async def test_second_pending_job_for_player_rejected_by_db(db_sessionmaker):
 async def test_reset_stale_jobs_requeues_running(db_sessionmaker):
     async with db_sessionmaker() as db:
         player = await _seed(db, 0)
-        job = Job(player_id=player.id, status="running", total=5, created_at=_utcnow())
-        done = Job(player_id=player.id, status="done", total=1, created_at=_utcnow())
+        job = Job(player_id=player.id, status="running", total=5, created_at=utcnow())
+        done = Job(player_id=player.id, status="done", total=1, created_at=utcnow())
         db.add_all([job, done])
         await db.commit()
 
@@ -497,8 +497,8 @@ async def test_games_analyzed_today_ignores_yesterday(db_sessionmaker):
     async with db_sessionmaker() as db:
         player = await _seed(db, 2)
         games = (await db.scalars(select(Game))).all()
-        games[0].analyzed_at = _utcnow()
-        games[1].analyzed_at = _utcnow() - timedelta(days=1)
+        games[0].analyzed_at = utcnow()
+        games[1].analyzed_at = utcnow() - timedelta(days=1)
         await db.commit()
 
         assert await games_analyzed_today(db) == 1
