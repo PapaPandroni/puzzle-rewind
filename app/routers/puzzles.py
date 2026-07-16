@@ -15,6 +15,7 @@ from app.analysis import (
     move_delivers_checkmate,
     mover_moves_in_line,
     preset_for_rating,
+    replay_to_ply,
     variation_board,
     variation_move_uci,
 )
@@ -27,6 +28,7 @@ from app.schemas import (
     AttemptRequest,
     AttemptResponse,
     JobStatus,
+    LastMove,
     PuzzleSetResponse,
     PuzzleSummary,
 )
@@ -67,6 +69,27 @@ def _game_url(game: Game, ply: int) -> str:
 
 def _to_epoch_ms(dt: datetime) -> int:
     return int(dt.replace(tzinfo=UTC).timestamp() * 1000)
+
+
+def _derive_last_move(game: Game, puzzle: Puzzle) -> LastMove | None:
+    """Opponent's move at ply-1, replayed from the stored movelist.
+
+    None (graceful degradation) when moves_san is missing (pre-Phase-3 rows),
+    the SAN doesn't replay, or the replayed position disagrees with the stored
+    puzzle FEN — never hand the frontend a wrong move to animate.
+    """
+    if not game.moves_san or puzzle.ply < 1:
+        return None
+    moves = game.moves_san.split()
+    try:
+        board = replay_to_ply(moves, puzzle.ply - 1)
+        fen_before = board.fen()
+        move = board.push_san(moves[puzzle.ply - 1])
+    except (ValueError, IndexError):
+        return None
+    if board.fen() != puzzle.fen:
+        return None
+    return LastMove(uci=move.uci(), san=moves[puzzle.ply - 1], fen_before=fen_before)
 
 
 async def _persist_game(db: AsyncSession, player: Player, username: str, game: dict) -> bool:
@@ -430,29 +453,35 @@ async def get_player_puzzles(
             job=job_status,
         )
 
-    candidates: list[PuzzleSummary] = []
+    selected: list[tuple[Game, Puzzle]] = []
     for game in games:
         eff_threshold = _effective_threshold(preset, threshold, game.player_rating)
         for puzzle in game.puzzles:
             if puzzle.win_drop < eff_threshold:
                 continue
-            candidates.append(
-                PuzzleSummary(
-                    id=puzzle.id,
-                    fen=puzzle.fen,
-                    side_to_move=puzzle.side_to_move,
-                    game_url=_game_url(game, puzzle.ply),
-                    opponent_name=game.opponent_name,
-                    opponent_rating=game.opponent_rating,
-                    speed=game.speed,
-                    played_at=game.played_at,
-                    win_drop=puzzle.win_drop,
-                    mover_moves_in_line=mover_moves_in_line(puzzle.variation_san.split()),
-                )
-            )
+            selected.append((game, puzzle))
 
-    random.Random().shuffle(candidates)
-    candidates = candidates[:limit]
+    random.Random().shuffle(selected)
+    selected = selected[:limit]
+
+    # Summaries are built only for the returned slice: _derive_last_move replays
+    # the game with python-chess, which would be wasted on discarded candidates.
+    candidates = [
+        PuzzleSummary(
+            id=puzzle.id,
+            fen=puzzle.fen,
+            side_to_move=puzzle.side_to_move,
+            game_url=_game_url(game, puzzle.ply),
+            opponent_name=game.opponent_name,
+            opponent_rating=game.opponent_rating,
+            speed=game.speed,
+            played_at=game.played_at,
+            win_drop=puzzle.win_drop,
+            mover_moves_in_line=mover_moves_in_line(puzzle.variation_san.split()),
+            last_move=_derive_last_move(game, puzzle),
+        )
+        for game, puzzle in selected
+    ]
 
     return PuzzleSetResponse(
         username=username,

@@ -4,6 +4,17 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class LastMove(BaseModel):
+    """Opponent's move leading into the puzzle position, derived at response
+    time from Game.moves_san (never stored). None on the summary when the
+    movelist is missing (pre-Phase-3 rows) — the frontend then skips the
+    intro animation and renders the puzzle as before."""
+
+    uci: str
+    san: str
+    fen_before: str
+
+
 class PuzzleSummary(BaseModel):
     id: int
     fen: str
@@ -15,6 +26,7 @@ class PuzzleSummary(BaseModel):
     played_at: datetime
     win_drop: float
     mover_moves_in_line: int  # how many line moves "Full line" mode requires (≤3)
+    last_move: LastMove | None = None
 
 
 class JobStatus(BaseModel):

@@ -1,3 +1,4 @@
+import chess
 import pytest
 
 from app.lichess import LichessRateLimited, LichessUserNotFound
@@ -63,11 +64,81 @@ async def test_get_puzzles_full_flow(client, monkeypatch, peremil_games):
         "played_at",
         "win_drop",
         "mover_moves_in_line",
+        "last_move",
     }
     assert 0 <= puzzle["mover_moves_in_line"] <= 3
     # Solution must never leak in the list response.
     assert "solution_uci" not in puzzle
     assert "solution_san" not in puzzle
+
+    # last_move must be internally consistent (fen_before + san/uci replays to
+    # the puzzle position) and match the source movelist at ply-1.
+    fixture_by_id = {g["id"]: g for g in peremil_games}
+    for p in body["puzzles"]:
+        lm = p["last_move"]
+        assert lm is not None  # every synced game stores moves_san
+        board = chess.Board(lm["fen_before"])
+        move = board.push_san(lm["san"])
+        assert move.uci() == lm["uci"]
+        assert board.fen() == p["fen"]
+        path, ply_str = p["game_url"].rsplit("#", 1)
+        lichess_id = path.split("lichess.org/")[1].split("/")[0]
+        assert lm["san"] == fixture_by_id[lichess_id]["moves"].split()[int(ply_str) - 1]
+
+
+@pytest.mark.asyncio
+async def test_last_move_null_when_moves_san_missing(db_sessionmaker, client):
+    # Pre-Phase-3 Game rows have moves_san=NULL: the list endpoint must degrade
+    # to last_move=null, not 500.
+    from datetime import UTC, datetime
+
+    from app.models import Game, Player, Puzzle
+
+    now = datetime.now(UTC).replace(tzinfo=None)
+    async with db_sessionmaker() as session:
+        # last_fetched_at=now: cache fresh, no upstream fetch to monkeypatch;
+        # raw_analysis_processed=True: no engine job gets queued.
+        player = Player(username="oldrows", last_fetched_at=now)
+        session.add(player)
+        await session.flush()
+        game = Game(
+            lichess_id="oldrow0001",
+            player_id=player.id,
+            player_color="white",
+            player_rating=1500,
+            opponent_name="opp",
+            opponent_rating=1500,
+            speed="blitz",
+            played_at=now,
+            raw_analysis_processed=True,
+        )  # moves_san deliberately unset (NULL)
+        session.add(game)
+        await session.flush()
+        session.add(
+            Puzzle(
+                game_id=game.id,
+                ply=20,
+                fen=LINE_FEN,
+                side_to_move="white",
+                solution_uci="b3b4",
+                solution_san="Qb4",
+                played_uci="b3b1",
+                played_san="Qb1",
+                variation_san=LINE_SAN,
+                win_drop=30.0,
+                eval_before_cp=200,
+                eval_after_cp=-150,
+            )
+        )
+        await session.commit()
+
+    resp = await client.get(
+        "/api/players/oldrows/puzzles", params={"preset": "custom", "threshold": 10}
+    )
+    assert resp.status_code == 200
+    puzzles = resp.json()["puzzles"]
+    assert len(puzzles) == 1
+    assert puzzles[0]["last_move"] is None
 
 
 @pytest.mark.asyncio

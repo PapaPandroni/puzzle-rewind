@@ -12,6 +12,15 @@ let position = null;
 // (opponent replies, line reveals) can detect they're stale and abort.
 let playToken = 0;
 
+// Intro replay of the opponent's last move: hold the pre-move position, animate
+// the move slower than chessground's 200ms default, then (mid-line replays
+// only) hold before restoring the true position.
+const INTRO_DELAY_MS = 500;
+const INTRO_MOVE_MS = 500;
+const INTRO_HOLD_MS = 600;
+
+const opposite = (color) => (color === "white" ? "black" : "white");
+
 function toDests(chess) {
   const dests = new Map();
   for (const s of SQUARES) {
@@ -42,6 +51,7 @@ export function renderPuzzle() {
   state.lineIndex = 0;
   const date = new Date(puzzle.played_at).toLocaleDateString();
   const lineMode = state.mode === "line";
+  const lm = puzzle.last_move;
   const n = movesToFind(puzzle);
   const taskCopy = lineMode ? `Find the best line (${n} move${n === 1 ? "" : "s"})` : "Find the best move";
 
@@ -54,12 +64,13 @@ export function renderPuzzle() {
         <div class="matchup"><strong>${state.username}</strong> vs ${puzzle.opponent_name} (${puzzle.opponent_rating}) &middot; ${puzzle.speed} &middot; ${date}</div>
         <div class="side-badge">${puzzle.side_to_move === "white" ? "White" : "Black"} to move</div>
       </div>
-      <div class="task-line">${taskCopy}</div>
+      <div class="task-line">${lm ? `Opponent played <strong>${lm.san}</strong>. ` : ""}${taskCopy}</div>
       <div class="board-wrap"><div id="board" class="cg-board"></div></div>
       <div id="feedback" class="feedback"></div>
       <div id="replay" class="replay"></div>
       <div class="puzzle-actions">
         <button id="give-up-btn" class="link-btn">${lineMode ? "Give up / show the line" : "Give up / show solution"}</button>
+        ${lm ? `<button id="replay-opp-btn" class="link-btn">&#8634; Replay opponent's move</button>` : ""}
       </div>
       <div class="puzzle-counter">Puzzle ${state.index + 1} of ${state.puzzles.length}${
         PERIOD_CONTEXT[state.period]
@@ -87,12 +98,14 @@ export function renderPuzzle() {
 
   const boardEl = wrap.querySelector("#board");
   state.cg = Chessground(boardEl, {
-    fen: puzzle.fen,
+    // With last-move context, start one ply back and locked; playOpponentIntro
+    // animates the opponent's move in and unlocks.
+    fen: lm ? lm.fen_before : puzzle.fen,
     orientation: puzzle.side_to_move,
-    turnColor: puzzle.side_to_move,
+    turnColor: lm ? opposite(puzzle.side_to_move) : puzzle.side_to_move,
     movable: {
       free: false,
-      color: puzzle.side_to_move,
+      color: lm ? undefined : puzzle.side_to_move,
       dests: toDests(position),
       events: {
         after: (orig, dest) => onUserMove(orig, dest),
@@ -101,6 +114,10 @@ export function renderPuzzle() {
   });
 
   wrap.querySelector("#give-up-btn").addEventListener("click", () => submitAttempt(null));
+  if (lm) {
+    wrap.querySelector("#replay-opp-btn").addEventListener("click", playOpponentIntro);
+    playOpponentIntro();
+  }
 }
 
 function applyUci(uci) {
@@ -120,6 +137,43 @@ function syncBoardFromPosition({ unlock }) {
       ? { color: puzzle.side_to_move, dests: toDests(position) }
       : { color: undefined },
   });
+}
+
+// Snap to the position before the opponent's last move, then animate that move
+// slowly, leaving its highlight (later syncs omit lastMove while `position` has
+// no history, so it persists). Serves both the on-load intro and the replay
+// button; on a mid-line replay it holds briefly and then animates back to the
+// true current position. Bumping playToken makes each run cancel the previous
+// one (double-click safe) and lets submitAttempt cancel a running intro.
+function playOpponentIntro() {
+  const puzzle = state.puzzles[state.index];
+  const lm = puzzle.last_move;
+  const token = ++playToken;
+
+  state.cg.set({
+    fen: lm.fen_before,
+    lastMove: undefined, // explicit undefined clears the highlight; omitting keeps it
+    turnColor: opposite(puzzle.side_to_move),
+    movable: { color: undefined },
+    // enabled:false, NOT duration:0 — chessground disables animation for good
+    // when a merged duration lands under 70ms.
+    animation: { enabled: false },
+  });
+  setTimeout(() => {
+    if (token !== playToken) return;
+    state.cg.set({
+      fen: puzzle.fen,
+      lastMove: [lm.uci.slice(0, 2), lm.uci.slice(2, 4)],
+      turnColor: puzzle.side_to_move,
+      animation: { enabled: true, duration: INTRO_MOVE_MS },
+    });
+    const hold = position.history().length ? INTRO_HOLD_MS : 0;
+    setTimeout(() => {
+      if (token !== playToken) return;
+      state.cg.set({ animation: { enabled: true, duration: 200 } }); // no fen: config-only
+      syncBoardFromPosition({ unlock: true }); // no-op on load; restores an advanced line
+    }, INTRO_MOVE_MS + hold);
+  }, INTRO_DELAY_MS);
 }
 
 // Step-through replay of a solution line. Renders on a throwaway Chess instance
@@ -189,6 +243,12 @@ async function onUserMove(orig, dest) {
 }
 
 async function submitAttempt(moveUci) {
+  // Cancel a running intro/replay (give-up is clickable mid-intro) — its
+  // pending timeouts would otherwise repaint puzzle.fen over the reveal — and
+  // undo the intro's animation overrides (a cancelled intro can leave
+  // enabled:false in cg state).
+  playToken++;
+  state.cg.set({ animation: { enabled: true, duration: 200 } });
   const puzzle = state.puzzles[state.index];
   let result;
   try {
@@ -241,7 +301,11 @@ function showResult(result, moveUci) {
       });
     };
     if (moveUci) {
-      setTimeout(revealSolution, 500); // let the shake/red-flash play first
+      const token = playToken;
+      setTimeout(() => {
+        if (token !== playToken) return; // aborted: moved on to the next puzzle
+        revealSolution();
+      }, 500); // let the shake/red-flash play first
     } else {
       revealSolution();
     }
@@ -271,6 +335,10 @@ function showLineResult(result, moveUci) {
     feedbackEl.innerHTML = `<p class="result-correct">Found it — ${found} of ${movesToFind(puzzle)}. Keep going.</p>`;
     const giveUpBtn = document.getElementById("give-up-btn");
     if (giveUpBtn) giveUpBtn.disabled = true;
+    // Replay is paused too — its playToken bump would cancel the reply timeout
+    // below and strand the puzzle mid-line.
+    const replayBtn = document.getElementById("replay-opp-btn");
+    if (replayBtn) replayBtn.disabled = true;
     const token = playToken;
     setTimeout(() => {
       if (token !== playToken) return;
@@ -278,6 +346,7 @@ function showLineResult(result, moveUci) {
       state.lineIndex += 2;
       syncBoardFromPosition({ unlock: true });
       if (giveUpBtn) giveUpBtn.disabled = false;
+      if (replayBtn) replayBtn.disabled = false;
     }, 300);
     return;
   }
