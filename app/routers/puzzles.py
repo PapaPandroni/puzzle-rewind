@@ -497,7 +497,7 @@ async def get_player_puzzles(
 
 
 @router.post("/api/puzzles/{puzzle_id}/attempt", response_model=AttemptResponse)
-@limiter.limit("120/minute")  # line mode sends up to 3 attempts per puzzle
+@limiter.limit("120/minute")  # up to 3 moves per line, and a miss can be retried
 async def attempt_puzzle(
     request: Request,
     response: Response,
@@ -551,15 +551,21 @@ async def attempt_puzzle(
                 opponent_reply_uci = reply
                 line_complete = False
 
+    # A wrong move is retryable — the frontend rewinds the board and lets the
+    # user try again — so it gets the verdict and nothing else. The answer is
+    # revealed only when it's earned (correct) or asked for (give-up, move_uci
+    # None), never while the user is still solving.
+    withhold = body.move_uci is not None and not correct
+
     return AttemptResponse(
         correct=correct,
-        solution_uci=expected_uci,
-        solution_san=expected_san,
-        played_san=puzzle.played_san,
-        win_drop=puzzle.win_drop,
+        solution_uci=None if withhold else expected_uci,
+        solution_san=None if withhold else expected_san,
+        played_san=None if withhold else puzzle.played_san,
+        win_drop=None if withhold else puzzle.win_drop,
         # Mid-line responses omit the line so moves 2-3 aren't spoiled (§2.1);
         # the full line is revealed only once the attempt sequence is over.
-        variation_san=line if line_complete else [],
+        variation_san=[] if withhold or not line_complete else line,
         opponent_reply_uci=opponent_reply_uci,
         line_complete=line_complete,
     )

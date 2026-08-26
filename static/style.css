@@ -366,6 +366,13 @@ h2 {
   font-weight: 600;
 }
 
+/* A miss you can still recover from — same red, but its own hook so "try
+   again" stays distinguishable from a finished, revealed puzzle. */
+.result-retry {
+  color: var(--error);
+  font-weight: 600;
+}
+
 .variation {
   color: var(--text-dim);
   font-size: 0.85rem;

@@ -184,16 +184,30 @@ async def test_attempt_wrong_then_correct_move(client, monkeypatch, peremil_game
     assert wrong.status_code == 200
     wrong_body = wrong.json()
     assert wrong_body["correct"] is False
-    assert wrong_body["solution_uci"]
-    assert wrong_body["solution_san"]
-    assert wrong_body["played_san"]
+    # A wrong move is retryable, so the verdict travels alone — no answer in the
+    # response body while the user is still solving.
+    assert wrong_body["solution_uci"] is None
+    assert wrong_body["solution_san"] is None
+    assert wrong_body["played_san"] is None
+    assert wrong_body["win_drop"] is None
+    assert wrong_body["variation_san"] == []
+
+    # The solution is learned the only way it can be: by giving up.
+    revealed = await client.post(
+        f"/api/puzzles/{puzzle_id}/attempt", json={"move_uci": None}
+    )
+    solution_uci = revealed.json()["solution_uci"]
+    assert solution_uci
 
     right = await client.post(
         f"/api/puzzles/{puzzle_id}/attempt",
-        json={"move_uci": wrong_body["solution_uci"]},
+        json={"move_uci": solution_uci},
     )
     assert right.status_code == 200
-    assert right.json()["correct"] is True
+    right_body = right.json()
+    assert right_body["correct"] is True
+    assert right_body["solution_san"]
+    assert right_body["played_san"]
 
 
 @pytest.mark.asyncio
@@ -462,7 +476,7 @@ async def test_line_mode_full_line_success(db_sessionmaker, client):
 
 
 @pytest.mark.asyncio
-async def test_line_mode_wrong_move_mid_line_reveals_full_line(db_sessionmaker, client):
+async def test_line_mode_wrong_move_mid_line_withholds_line(db_sessionmaker, client):
     puzzle_id = await _seed_line_puzzle(db_sessionmaker)
     resp = await client.post(
         f"/api/puzzles/{puzzle_id}/attempt",
@@ -470,10 +484,34 @@ async def test_line_mode_wrong_move_mid_line_reveals_full_line(db_sessionmaker, 
     )
     body = resp.json()
     assert body["correct"] is False
-    assert body["line_complete"] is True
-    # The reveal names the move expected at *this* index, not the line's first move.
-    assert body["solution_san"] == "Qc4"
-    assert body["solution_uci"] == "b4c4"
+    # The user gets another go from the top of the line, so nothing is revealed.
+    assert body["solution_san"] is None
+    assert body["solution_uci"] is None
+    assert body["played_san"] is None
+    assert body["win_drop"] is None
+    assert body["variation_san"] == []
+
+
+@pytest.mark.asyncio
+async def test_line_mode_retry_then_give_up_reveals(db_sessionmaker, client):
+    """The retry flow end to end: a miss withholds, the give-up after it reveals."""
+    puzzle_id = await _seed_line_puzzle(db_sessionmaker)
+
+    missed = await client.post(
+        f"/api/puzzles/{puzzle_id}/attempt",
+        json={"move_uci": "b3b5", "mode": "line", "move_index": 0},
+    )
+    assert missed.json()["correct"] is False
+    assert missed.json()["variation_san"] == []
+
+    # Frontend rewinds to move_index 0; giving up there asks for the answer.
+    gave_up = await client.post(
+        f"/api/puzzles/{puzzle_id}/attempt",
+        json={"move_uci": None, "mode": "line", "move_index": 0},
+    )
+    body = gave_up.json()
+    assert body["correct"] is False
+    assert body["solution_san"] == "Qb4"
     assert body["variation_san"] == LINE_SAN.split()
 
 

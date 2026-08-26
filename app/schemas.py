@@ -69,11 +69,20 @@ class AttemptRequest(BaseModel):
 
 
 class AttemptResponse(BaseModel):
+    """Verdict on one attempt, plus the reveal — but only when the reveal is due.
+
+    A wrong *move* is retryable (the frontend resets the board and lets the user
+    try again), so it returns the verdict alone: shipping the answer would leave
+    it sitting in the network tab while the user is still solving. The reveal
+    fields are populated for a correct attempt and for the give-up path
+    (`move_uci is None`), which is the only way to ask for the answer outright.
+    """
+
     correct: bool
-    solution_uci: str
-    solution_san: str
-    played_san: str
-    win_drop: float
-    variation_san: list[str]
+    solution_uci: str | None = None
+    solution_san: str | None = None
+    played_san: str | None = None
+    win_drop: float | None = None
+    variation_san: list[str] = []
     opponent_reply_uci: str | None = None
     line_complete: bool = True

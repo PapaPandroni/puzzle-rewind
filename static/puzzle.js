@@ -11,6 +11,11 @@ let position = null;
 // Bumped on every renderPuzzle so animation timeouts from a previous puzzle
 // (opponent replies, line reveals) can detect they're stale and abort.
 let playToken = 0;
+// How many times the current puzzle has been missed. A miss is retryable now,
+// so "solved" alone no longer means "solved clean" — this keeps the session
+// counter honest about first-try solves, and lets the second miss explain the
+// top-move-only rule to someone who may be stuck on a good alternative.
+let misses = 0;
 
 // Intro replay of the opponent's last move: hold the pre-move position, animate
 // the move slower than chessground's 200ms default, then (mid-line replays
@@ -49,6 +54,7 @@ export function renderPuzzle() {
   const puzzle = state.puzzles[state.index];
   position = new Chess(puzzle.fen);
   state.lineIndex = 0;
+  misses = 0;
   const date = new Date(puzzle.played_at).toLocaleDateString();
   const lineMode = state.mode === "line";
   const lm = puzzle.last_move;
@@ -260,21 +266,73 @@ async function submitAttempt(moveUci) {
   } catch (err) {
     document.getElementById("feedback").innerHTML =
       `<p class="result-incorrect">Couldn't check that move: ${err.message}</p>`;
+    // onUserMove locked the board to await the verdict; without this the
+    // puzzle would be stuck unplayable after a failed request.
+    syncBoardFromPosition({ unlock: true });
+    return;
+  }
+  // A wrong move is retryable in both modes: rewind to the puzzle's starting
+  // position and let the user go again. Only a give-up (moveUci null) reveals.
+  if (moveUci && !result.correct) {
+    misses++;
+    showRetry();
     return;
   }
   // One counter for both modes: a mid-line correct isn't "solved" yet
-  // (line_complete false), and any miss ends the line unsolved.
-  if (result.correct && result.line_complete) state.solvedFirstTry++;
+  // (line_complete false), and a puzzle that took a retry isn't a first-try solve.
+  if (result.correct && result.line_complete && !misses) state.solvedFirstTry++;
   if (state.mode === "line") {
     showLineResult(result, moveUci);
   } else {
-    showResult(result, moveUci);
+    showResult(result);
   }
+}
+
+// --- retry after a miss --------------------------------------------------------
+
+// Rewind to the puzzle's starting position for another attempt. Not a
+// syncBoardFromPosition call: a fresh Chess has no history, so the helper would
+// omit lastMove and leave chessground still highlighting the move that missed.
+function resetToStart() {
+  const puzzle = state.puzzles[state.index];
+  const lm = puzzle.last_move;
+  position = new Chess(puzzle.fen);
+  state.lineIndex = 0;
+  state.cg.set({
+    fen: puzzle.fen,
+    // Back to the opponent's move as the highlight, exactly as on load.
+    lastMove: lm ? [lm.uci.slice(0, 2), lm.uci.slice(2, 4)] : undefined,
+    turnColor: puzzle.side_to_move,
+    movable: { color: puzzle.side_to_move, dests: toDests(position) },
+  });
+}
+
+function showRetry() {
+  const boardWrap = document.querySelector(".board-wrap");
+  // Re-adding a class already on the element won't restart the shake — drop it
+  // and force a reflow so every miss animates, not just the first.
+  boardWrap.classList.remove("flash-incorrect");
+  void boardWrap.offsetWidth;
+  boardWrap.classList.add("flash-incorrect");
+  // Held back on the first miss so a single wrong guess stays uncluttered: from
+  // the second on, the user may be repeating a good move we simply don't accept.
+  const caveat =
+    misses > 1
+      ? `<p class="limitation-note">Only the engine's top ${state.mode === "line" ? "line" : "move"} is accepted &mdash; other equally good moves aren't yet.</p>`
+      : "";
+  document.getElementById("feedback").innerHTML =
+    `<p class="result-retry">Not quite &mdash; try again.</p>${caveat}`;
+  const token = playToken;
+  setTimeout(() => {
+    if (token !== playToken) return; // aborted: gave up, or moved on to the next puzzle
+    boardWrap.classList.remove("flash-incorrect"); // don't leave the red ring up while retrying
+    resetToStart();
+  }, 500); // let the shake/red-flash play first
 }
 
 // --- single-move mode (Phase 1 behavior, unchanged) ---------------------------
 
-function showResult(result, moveUci) {
+function showResult(result) {
   const puzzle = state.puzzles[state.index];
   const feedbackEl = document.getElementById("feedback");
   const boardWrap = document.querySelector(".board-wrap");
@@ -286,31 +344,21 @@ function showResult(result, moveUci) {
       ${result.variation_san.length ? `<p class="variation">Line: ${result.variation_san.join(" ")}</p>` : ""}
     `;
   } else {
+    // Give-up only: a wrong move never lands here, it goes through showRetry().
     boardWrap.classList.add("flash-incorrect");
-    const revealSolution = () => {
-      const solved = new Chess(puzzle.fen);
-      solved.move({
-        from: result.solution_uci.slice(0, 2),
-        to: result.solution_uci.slice(2, 4),
-        promotion: result.solution_uci[4],
-      });
-      state.cg.set({
-        fen: solved.fen(),
-        lastMove: [result.solution_uci.slice(0, 2), result.solution_uci.slice(2, 4)],
-        movable: { color: undefined },
-      });
-    };
-    if (moveUci) {
-      const token = playToken;
-      setTimeout(() => {
-        if (token !== playToken) return; // aborted: moved on to the next puzzle
-        revealSolution();
-      }, 500); // let the shake/red-flash play first
-    } else {
-      revealSolution();
-    }
+    const solved = new Chess(puzzle.fen);
+    solved.move({
+      from: result.solution_uci.slice(0, 2),
+      to: result.solution_uci.slice(2, 4),
+      promotion: result.solution_uci[4],
+    });
+    state.cg.set({
+      fen: solved.fen(),
+      lastMove: [result.solution_uci.slice(0, 2), result.solution_uci.slice(2, 4)],
+      movable: { color: undefined },
+    });
     feedbackEl.innerHTML = `
-      <p class="result-incorrect">Best was <strong>${result.solution_san}</strong>. In the game you played ${result.played_san}.</p>
+      <p class="result-incorrect">The move was <strong>${result.solution_san}</strong>. In the game you played ${result.played_san}.</p>
       ${result.variation_san.length ? `<p class="variation">Line: ${result.variation_san.join(" ")}</p>` : ""}
       <p class="limitation-note">The answer is the engine's top choice — other equally good moves aren't accepted yet.</p>
     `;
@@ -388,30 +436,22 @@ function showLineResult(result, moveUci) {
       `;
     }
   } else {
+    // Give-up only: a wrong move never lands here, it goes through showRetry().
     boardWrap.classList.add("flash-incorrect");
-    const token = playToken;
-    const reveal = () => {
-      if (token !== playToken) return; // aborted: moved on to the next puzzle
-      if (result.variation_san.length) {
-        // Open on the correct move they missed; Back rewinds, Forward continues.
-        mountLineReplay(
-          document.getElementById("replay"),
-          puzzle.fen,
-          result.variation_san,
-          state.lineIndex + 1,
-        );
-      } else {
-        applyUci(result.solution_uci);
-        syncBoardFromPosition({ unlock: false });
-      }
-    };
-    if (moveUci) {
-      setTimeout(reveal, 500); // let the shake/red-flash play first
+    if (result.variation_san.length) {
+      // Open on the correct move they were looking for; Back rewinds, Forward continues.
+      mountLineReplay(
+        document.getElementById("replay"),
+        puzzle.fen,
+        result.variation_san,
+        state.lineIndex + 1,
+      );
     } else {
-      reveal();
+      applyUci(result.solution_uci);
+      syncBoardFromPosition({ unlock: false });
     }
     feedbackEl.innerHTML = `
-      <p class="result-incorrect">Best was <strong>${result.solution_san}</strong>. Step through the line below.</p>
+      <p class="result-incorrect">The move was <strong>${result.solution_san}</strong>. Step through the line below.</p>
       ${result.variation_san.length ? `<p class="variation">Line: ${result.variation_san.join(" ")}</p>` : ""}
       <p class="limitation-note">The answer is the engine's top line — other equally good moves aren't accepted yet.</p>
     `;

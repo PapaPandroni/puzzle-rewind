@@ -23,7 +23,9 @@ Static frontend is served from `/` (check `/app.js`, `/puzzle.js` etc. return 20
 - `POST /api/puzzles/{id}/attempt` is stateless — the same puzzle can be attempted
   repeatedly, so a give-up (`{"move_uci": null}`) reveals the solution/line for
   scripting correct attempts afterwards. Use python-chess to convert the revealed
-  SAN line to UCI per position.
+  SAN line to UCI per position. A *wrong move* reveals nothing (`solution_uci`,
+  `solution_san`, `played_san`, `win_drop` null, `variation_san` empty) — it's a
+  retryable miss, so give-up is the only way to script the answer out.
 - Gotchas: our own per-IP limiter is 20/min on the puzzles list (bursting it poisons
   the next minute of requests); `games_scanned` can exceed `max=20` — Lichess
   over-delivers a few games (known, see DESIGN §6.3 "~20-24-game fetch").
@@ -38,9 +40,13 @@ computing pixel coords from `#board`'s bounding box (8x8 grid; flip files/ranks 
 search screen selectors are `#username-input`, `.search-btn`, `button[data-mode=]`,
 `button[data-period=]`, `button[data-preset=]`; puzzle screen: `.task-line`,
 `#give-up-btn`, `#next-btn`, `.result-correct`, `.result-incorrect`, `.puzzle-counter`.
-In line mode, a miss/give-up/line-completion mounts the step-through solution replay
+In line mode, a give-up or line-completion mounts the step-through solution replay
 in `#replay`: `.replay-controls`, `[data-replay="back"]`, `[data-replay="fwd"]`,
 `.replay-counter` (text `move i of N`) — buttons disable at the line's two ends.
+A *miss* does not end the puzzle: `.result-retry` ("Not quite — try again.") appears,
+the action row keeps `#give-up-btn` (no `#next-btn`), and ~500ms later the board
+rewinds to the puzzle's starting FEN with `state.lineIndex` back at 0 — so a
+mid-line miss means replaying the line from move 1.
 Intercept the search response with `page.expect_response(lambda r: "/puzzles?" in r.url
 and r.status == 200)` to learn puzzle ids/FENs for scripting moves.
 
