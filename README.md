@@ -67,6 +67,15 @@ uv run pytest
 
 Tests run fully offline against committed Lichess API fixtures in `tests/fixtures/`. The handful of engine tests additionally need a local Stockfish binary (`brew install stockfish`) and are auto-skipped when it's absent.
 
+### One-off maintenance
+
+```bash
+uv run python -m app.backfill --dry-run   # report counts, write nothing
+uv run python -m app.backfill             # repair
+```
+
+Refills `games.moves_san` on rows persisted before the Phase 3 migration added the column, which nothing else repairs — the sync skips a game whose `lichess_id` it already knows. Without a movelist the API can't derive the opponent's last move, so those puzzles load with no "Opponent played X." intro. Safe to interrupt and re-run: it only writes a movelist onto a row that has none, and games Lichess no longer serves are reported and left alone.
+
 ### Building the container
 
 ```bash
