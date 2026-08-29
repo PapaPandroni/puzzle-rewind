@@ -1,3 +1,4 @@
+import logging
 import random
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
@@ -34,6 +35,7 @@ from app.schemas import (
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 UsernamePath = Annotated[str, Path(pattern=r"^[a-zA-Z0-9_-]{2,30}$")]
 Preset = Literal["auto", "beginner", "intermediate", "advanced", "expert", "custom"]
@@ -71,6 +73,25 @@ def _to_epoch_ms(dt: datetime) -> int:
     return int(dt.replace(tzinfo=UTC).timestamp() * 1000)
 
 
+def _no_last_move(reason: str, game: Game, puzzle: Puzzle) -> None:
+    """Name a skipped intro, then degrade gracefully.
+
+    Returning None is the right behavior — the frontend renders the puzzle
+    without the intro. Doing it *silently* was the problem: all four branches
+    below look identical from the outside (no task-line prefix, no replay
+    button, no animation), so telling them apart took a full code audit. Each
+    one now says which it was and which row it came from.
+    """
+    logger.warning(
+        "last_move unavailable (%s): puzzle=%s game=%s ply=%s",
+        reason,
+        puzzle.id,
+        game.lichess_id,
+        puzzle.ply,
+    )
+    return None
+
+
 def _derive_last_move(game: Game, puzzle: Puzzle) -> LastMove | None:
     """Opponent's move at ply-1, replayed from the stored movelist.
 
@@ -78,17 +99,19 @@ def _derive_last_move(game: Game, puzzle: Puzzle) -> LastMove | None:
     the SAN doesn't replay, or the replayed position disagrees with the stored
     puzzle FEN — never hand the frontend a wrong move to animate.
     """
-    if not game.moves_san or puzzle.ply < 1:
-        return None
+    if not game.moves_san:
+        return _no_last_move("no_movelist", game, puzzle)
+    if puzzle.ply < 1:
+        return _no_last_move("ply_zero", game, puzzle)
     moves = game.moves_san.split()
     try:
         board = replay_to_ply(moves, puzzle.ply - 1)
         fen_before = board.fen()
         move = board.push_san(moves[puzzle.ply - 1])
     except (ValueError, IndexError):
-        return None
+        return _no_last_move("unreplayable", game, puzzle)
     if board.fen() != puzzle.fen:
-        return None
+        return _no_last_move("fen_mismatch", game, puzzle)
     return LastMove(uci=move.uci(), san=moves[puzzle.ply - 1], fen_before=fen_before)
 
 

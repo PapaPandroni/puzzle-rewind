@@ -1,3 +1,5 @@
+import logging
+
 import chess
 import pytest
 
@@ -87,9 +89,10 @@ async def test_get_puzzles_full_flow(client, monkeypatch, peremil_games):
 
 
 @pytest.mark.asyncio
-async def test_last_move_null_when_moves_san_missing(db_sessionmaker, client):
+async def test_last_move_null_when_moves_san_missing(db_sessionmaker, client, caplog):
     # Pre-Phase-3 Game rows have moves_san=NULL: the list endpoint must degrade
-    # to last_move=null, not 500.
+    # to last_move=null, not 500 — and say so in the log, since the three
+    # missing UI affordances alone can't tell you which branch degraded.
     from datetime import UTC, datetime
 
     from app.models import Game, Player, Puzzle
@@ -132,13 +135,20 @@ async def test_last_move_null_when_moves_san_missing(db_sessionmaker, client):
         )
         await session.commit()
 
-    resp = await client.get(
-        "/api/players/oldrows/puzzles", params={"preset": "custom", "threshold": 10}
-    )
+    with caplog.at_level(logging.WARNING, logger="app.routers.puzzles"):
+        resp = await client.get(
+            "/api/players/oldrows/puzzles", params={"preset": "custom", "threshold": 10}
+        )
     assert resp.status_code == 200
     puzzles = resp.json()["puzzles"]
     assert len(puzzles) == 1
     assert puzzles[0]["last_move"] is None
+
+    # The reason and the offending row, so the next report needs a log line, not an audit.
+    assert any(
+        "no_movelist" in r.getMessage() and "oldrow0001" in r.getMessage()
+        for r in caplog.records
+    )
 
 
 @pytest.mark.asyncio
