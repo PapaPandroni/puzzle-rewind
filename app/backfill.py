@@ -8,13 +8,24 @@ opponent's-move intro — no "Opponent played X.", no replay button, no
 animation — because `_derive_last_move` has no movelist to replay and degrades
 to `last_move: null` (logged there as `no_movelist`).
 
-Run against production:
+This is a data repair, not a code change: the deployed app already re-derives
+last_move on every request, so repaired rows start showing their intro
+immediately, with no deploy involved.
 
-    railway run uv run python -m app.backfill --dry-run   # counts, no writes
-    railway run uv run python -m app.backfill
+Run it locally against production. Note that Railway's own DATABASE_URL points
+at `postgres.railway.internal`, which resolves only inside Railway's network —
+from a laptop you need the public proxy URL (`railway variables`, look for
+DATABASE_PUBLIC_URL). So `railway run` is *not* the invocation; this is:
 
-Safe to interrupt and re-run: it only ever writes a movelist onto a row that
-has none, and commits per batch, so a second run picks up exactly what is left.
+    DATABASE_URL="postgresql://...proxy.rlwy.net:PORT/railway" \
+        uv run python -m app.backfill --dry-run   # counts, no writes
+    DATABASE_URL="..." uv run python -m app.backfill
+
+If asyncpg rejects the connection over the proxy, append `?ssl=require` to the
+URL. Safe to run against a live app: it only writes `moves_san`, a column the
+request path reads and never writes. Safe to interrupt and re-run too — it only
+ever writes a movelist onto a row that has none, and commits per batch, so a
+second run picks up exactly what is left.
 """
 
 import argparse
