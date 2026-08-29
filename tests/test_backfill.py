@@ -200,3 +200,25 @@ async def test_backfill_is_idempotent(db_sessionmaker, monkeypatch):
     assert first.filled == 1
     # Nothing left to do: a re-run after a crash picks up only what remains.
     assert (second.candidates, second.filled) == (0, 0)
+
+
+@pytest.mark.asyncio
+async def test_backfill_limit_stops_early_and_leaves_the_rest_for_a_re_run(
+    db_sessionmaker, monkeypatch
+):
+    # The cautious operator's path: repair a slice, inspect the app, continue.
+    await _seed(db_sessionmaker, [("nullrow01", None), ("nullrow02", None)])
+    _patch_client(
+        monkeypatch,
+        _ndjson_transport(
+            [{"id": "nullrow01", "moves": MOVES}, {"id": "nullrow02", "moves": MOVES}]
+        ),
+    )
+
+    first = await backfill_moves_san(db_sessionmaker, limit=1, pause_s=0)
+
+    assert (first.candidates, first.filled) == (2, 1)
+    assert first.unrecoverable == []  # the skipped row was never requested
+
+    second = await backfill_moves_san(db_sessionmaker, pause_s=0)
+    assert (second.candidates, second.filled) == (1, 1)

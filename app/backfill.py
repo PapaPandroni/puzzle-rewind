@@ -83,6 +83,7 @@ async def backfill_moves_san(
     sessionmaker: async_sessionmaker,
     *,
     dry_run: bool = False,
+    limit: int | None = None,
     pause_s: float = BATCH_PAUSE_SECONDS,
     backoff_s: float = RATE_LIMIT_BACKOFF_SECONDS,
 ) -> BackfillReport:
@@ -97,6 +98,13 @@ async def backfill_moves_san(
     )
     if dry_run or not candidates:
         return report
+
+    if limit is not None:
+        # Deliberately partial: repair a slice, go look at the app, come back.
+        # Stopping early is a valid resting state, not a half-applied change —
+        # every row is independent and the next run re-surveys what is left.
+        candidates = candidates[:limit]
+        logger.info("--limit %d: repairing %d of them this run", limit, len(candidates))
 
     batches = [
         candidates[i : i + MAX_EXPORT_IDS] for i in range(0, len(candidates), MAX_EXPORT_IDS)
@@ -148,15 +156,27 @@ async def backfill_moves_san(
 async def _main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true", help="report counts, write nothing")
+    parser.add_argument(
+        "--limit",
+        type=int,
+        metavar="N",
+        help="repair at most N games this run, then stop (re-run to continue)",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-    report = await backfill_moves_san(async_session, dry_run=args.dry_run)
+    report = await backfill_moves_san(async_session, dry_run=args.dry_run, limit=args.limit)
 
     if args.dry_run:
         logger.info("dry run — nothing written")
         return
-    logger.info("done: filled %d of %d", report.filled, report.candidates)
+    attempted = min(args.limit, report.candidates) if args.limit else report.candidates
+    logger.info(
+        "done: filled %d of %d attempted (%d still missing a movelist)",
+        report.filled,
+        attempted,
+        report.candidates - report.filled,
+    )
     if report.unrecoverable:
         # Left in place on purpose: their puzzles stay solvable, just without the
         # intro, and _derive_last_move now logs each one as `no_movelist`.
