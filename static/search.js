@@ -15,6 +15,17 @@ const PERIODS = [
   ["all", "All time"],
 ];
 
+// Values must match Speed / SPEED_GROUPS in app/routers/puzzles.py. "Bullet"
+// covers ultraBullet and "Classical" covers correspondence server-side, so no
+// stored game is reachable only under "All".
+const SPEEDS = [
+  ["all", "All"],
+  ["bullet", "Bullet"],
+  ["blitz", "Blitz"],
+  ["rapid", "Rapid"],
+  ["classical", "Classical"],
+];
+
 const LOADING_COPY = {
   last20: "Fetching games from Lichess&hellip; this can take a few seconds.",
   day: "Scanning the last day of games&hellip; this can take a few seconds.",
@@ -41,36 +52,51 @@ export function renderSearch() {
     <div class="search-screen">
       <form id="search-form" class="search-form">
         <input id="username-input" type="text" placeholder="Lichess username" autocomplete="off" ${dis} />
-        <div class="preset-row mode-row">
-          <button type="button" ${dis} class="preset-btn${state.mode === "single" ? " active" : ""}" data-mode="single">Single move</button>
-          <button type="button" ${dis} class="preset-btn${state.mode === "line" ? " active" : ""}" data-mode="line">Full line</button>
+        <div class="field">
+          <p class="hint">Single move: find the one best move. Full line: follow the engine's refutation for up to 3 of your moves.</p>
+          <div class="preset-row mode-row">
+            <button type="button" ${dis} class="preset-btn${state.mode === "single" ? " active" : ""}" data-mode="single">Single move</button>
+            <button type="button" ${dis} class="preset-btn${state.mode === "line" ? " active" : ""}" data-mode="line">Full line</button>
+          </div>
         </div>
-        <p class="hint">Single move: find the one best move. Full line: follow the engine's refutation for up to 3 of your moves.</p>
-        <div class="preset-row period-row">
-          ${PERIODS.map(
-            ([value, label]) =>
-              `<button type="button" ${dis} class="preset-btn${state.period === value ? " active" : ""}" data-period="${value}">${label}</button>`
-          ).join("")}
+        <div class="field">
+          <p class="hint">How far back to mine games for puzzles. Results are cached, so repeat searches are instant.</p>
+          <div class="preset-row period-row">
+            ${PERIODS.map(
+              ([value, label]) =>
+                `<button type="button" ${dis} class="preset-btn${state.period === value ? " active" : ""}" data-period="${value}">${label}</button>`
+            ).join("")}
+          </div>
         </div>
-        <p class="hint">How far back to mine games for puzzles. Results are cached, so repeat searches are instant.</p>
-        <div class="preset-row">
-          ${presets
-            .map((p) => {
-              const label = p[0].toUpperCase() + p.slice(1);
-              const suffix = p === "auto" ? "" : ` &middot; ${PRESET_THRESHOLDS[p]}%`;
-              return `<button type="button" ${dis} class="preset-btn${state.preset === p ? " active" : ""}" data-preset="${p}">${label}${suffix}</button>`;
-            })
-            .join("")}
+        <div class="field">
+          <p class="hint">Which time controls to mine puzzles from.</p>
+          <div class="preset-row speed-row">
+            ${SPEEDS.map(
+              ([value, label]) =>
+                `<button type="button" ${dis} class="preset-btn${state.speed === value ? " active" : ""}" data-speed="${value}">${label}</button>`
+            ).join("")}
+          </div>
         </div>
-        <div class="threshold-section">
+        <div class="field">
           <p class="hint">Auto matches difficulty to your rating in each game; the other presets use one fixed threshold.</p>
+          <div class="preset-row">
+            ${presets
+              .map((p) => {
+                const label = p[0].toUpperCase() + p.slice(1);
+                const suffix = p === "auto" ? "" : ` &middot; ${PRESET_THRESHOLDS[p]}%`;
+                return `<button type="button" ${dis} class="preset-btn${state.preset === p ? " active" : ""}" data-preset="${p}">${label}${suffix}</button>`;
+              })
+              .join("")}
+          </div>
+        </div>
+        <div class="field">
+          <p class="hint">How big a mistake counts as a puzzle: lower = more, subtler puzzles.</p>
           <label class="slider-label">
             Win% drop threshold: <span id="threshold-value">${state.preset === "auto" ? "Auto" : state.threshold ?? 25}</span>
             <input id="threshold-slider" type="range" min="10" max="40" step="1" value="${state.threshold ?? 25}" ${
               state.preset === "auto" || state.loading ? "disabled" : ""
             } />
           </label>
-          <p class="hint">How big a mistake counts as a puzzle: lower = more, subtler puzzles.</p>
         </div>
         <button type="submit" ${dis} class="search-btn">Find puzzles</button>
       </form>
@@ -124,6 +150,13 @@ export function renderSearch() {
     });
   });
 
+  wrap.querySelectorAll(".speed-row .preset-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.speed = btn.dataset.speed;
+      renderSearch();
+    });
+  });
+
   wrap.querySelectorAll(".preset-btn[data-preset]").forEach((btn) => {
     btn.addEventListener("click", () => {
       state.preset = btn.dataset.preset;
@@ -163,7 +196,12 @@ export async function runSearch(username) {
   state.abort = new AbortController();
   renderSearch();
   try {
-    const params = new URLSearchParams({ preset: state.preset, period: state.period, limit: "50" });
+    const params = new URLSearchParams({
+      preset: state.preset,
+      period: state.period,
+      speed: state.speed,
+      limit: "50",
+    });
     if (state.threshold != null) params.set("threshold", String(state.threshold));
     const data = await api(`/api/players/${encodeURIComponent(username)}/puzzles?${params}`, {
       signal: state.abort.signal,
@@ -179,6 +217,8 @@ export async function runSearch(username) {
         state.error = "This player has no games on Lichess yet — play some games and come back!";
       } else if (data.reason === "no_games_in_period") {
         state.error = "No games found in this period — try a longer one.";
+      } else if (data.reason === "no_games_in_speed") {
+        state.error = "No games at that time control in this period — try another time control or a longer period.";
       } else {
         state.error = "No puzzles found for this player at the current difficulty. Try a lower threshold.";
       }

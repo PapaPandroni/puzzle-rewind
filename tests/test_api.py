@@ -997,3 +997,192 @@ async def test_job_total_counts_only_in_period_backlog(
     async with db_sessionmaker() as db:
         job = await db.scalar(select(Job).where(Job.id == body["job"]["id"]))
         assert job.period_start is not None
+
+
+# --- Time-control filter -----------------------------------------------------
+
+# Chip -> the raw Lichess speeds it must cover, mirroring SPEED_GROUPS in
+# app/routers/puzzles.py. The two rare speeds fold into a neighbour so no stored
+# game is reachable only under "all".
+SPEED_CASES = [
+    ("all", {"ultraBullet", "bullet", "blitz", "rapid", "classical", "correspondence"}),
+    ("bullet", {"ultraBullet", "bullet"}),
+    ("blitz", {"blitz"}),
+    ("rapid", {"rapid"}),
+    ("classical", {"classical", "correspondence"}),
+]
+
+
+async def _seed_speeds(
+    db_sessionmaker,
+    speeds: list[str],
+    *,
+    username: str = "speedy",
+    processed: bool = True,
+) -> None:
+    """One analyzed game per speed, each with one 30% puzzle.
+
+    last_fetched_at=now keeps the cache fresh so nothing upstream is fetched —
+    these tests are about the read-side filter, not the sync.
+    """
+    from datetime import UTC, datetime
+
+    from app.models import Game, Player, Puzzle
+
+    now = datetime.now(UTC).replace(tzinfo=None)
+    async with db_sessionmaker() as session:
+        player = Player(username=username, last_fetched_at=now)
+        session.add(player)
+        await session.flush()
+        for i, speed in enumerate(speeds):
+            game = Game(
+                lichess_id=f"spd{i:07d}",
+                player_id=player.id,
+                player_color="white",
+                player_rating=1500,
+                opponent_name="opp",
+                opponent_rating=1500,
+                speed=speed,
+                played_at=now,
+                raw_analysis_processed=processed,
+                moves_san="e4 e5",
+            )
+            session.add(game)
+            await session.flush()
+            session.add(
+                Puzzle(
+                    game_id=game.id,
+                    ply=20,
+                    fen=LINE_FEN,
+                    side_to_move="white",
+                    solution_uci="b3b4",
+                    solution_san="Qb4",
+                    played_uci="b3b1",
+                    played_san="Qb1",
+                    variation_san=LINE_SAN,
+                    win_drop=30.0,
+                    eval_before_cp=200,
+                    eval_after_cp=-150,
+                )
+            )
+        await session.commit()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("chip,expected", SPEED_CASES)
+async def test_speed_filter_selects_its_group(client, db_sessionmaker, chip, expected):
+    all_speeds = ["ultraBullet", "bullet", "blitz", "rapid", "classical", "correspondence"]
+    await _seed_speeds(db_sessionmaker, all_speeds)
+
+    resp = await client.get(
+        "/api/players/speedy/puzzles",
+        params={"preset": "custom", "threshold": 10, "speed": chip},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert {p["speed"] for p in body["puzzles"]} == expected
+    # The counters describe the filtered set, not the whole pool.
+    assert body["games_scanned"] == len(expected)
+    assert body["games_analyzed"] == len(expected)
+
+
+@pytest.mark.asyncio
+async def test_speed_defaults_to_all(client, db_sessionmaker):
+    await _seed_speeds(db_sessionmaker, ["bullet", "rapid"])
+
+    resp = await client.get(
+        "/api/players/speedy/puzzles", params={"preset": "custom", "threshold": 10}
+    )
+    assert resp.status_code == 200
+    assert {p["speed"] for p in resp.json()["puzzles"]} == {"bullet", "rapid"}
+
+
+@pytest.mark.asyncio
+async def test_unknown_speed_rejected(client, db_sessionmaker):
+    await _seed_speeds(db_sessionmaker, ["blitz"])
+
+    resp = await client.get("/api/players/speedy/puzzles", params={"speed": "hyperbullet"})
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_empty_speed_reported_apart_from_empty_period(client, db_sessionmaker):
+    # The two dead ends need different copy: one says "pick another time
+    # control", the other "search further back".
+    await _seed_speeds(db_sessionmaker, ["blitz"])
+
+    resp = await client.get(
+        "/api/players/speedy/puzzles",
+        params={"preset": "custom", "threshold": 10, "speed": "rapid"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["puzzles"] == []
+    assert body["reason"] == "no_games_in_speed"
+
+
+@pytest.mark.asyncio
+async def test_speed_filter_is_query_time_not_refetch(client, monkeypatch, peremil_games):
+    # Switching time controls must read the accumulated pool, never re-fetch —
+    # the Lichess export stays speed-blind so every speed is always covered.
+    call_count = 0
+    fake = _make_fake_fetch_games(peremil_games)
+
+    async def counting_fake_fetch_games(username, *, max_games=20, since=None, until=None, timeout=30.0, analysed=True):
+        nonlocal call_count
+        call_count += 1
+        async for g in fake(username, max_games=max_games, since=since):
+            yield g
+
+    monkeypatch.setattr("app.routers.puzzles.fetch_games", counting_fake_fetch_games)
+
+    for chip in ("all", "bullet", "blitz", "rapid", "classical"):
+        resp = await client.get(
+            "/api/players/peremil/puzzles",
+            params={"preset": "custom", "threshold": 10, "speed": chip},
+        )
+        assert resp.status_code == 200
+
+    assert call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_engine_job_scoped_to_selected_speed(client, db_sessionmaker):
+    # The banner may only promise puzzles the current search can show, and the
+    # engine budget must follow the same scope.
+    from sqlalchemy import select
+
+    from app.models import Job
+
+    await _seed_speeds(db_sessionmaker, ["bullet", "bullet", "rapid"], processed=False)
+
+    resp = await client.get(
+        "/api/players/speedy/puzzles",
+        params={"preset": "custom", "threshold": 10, "speed": "rapid"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["job"]["total"] == 1  # the rapid backlog only, not the bullet pile
+
+    async with db_sessionmaker() as db:
+        job = await db.scalar(select(Job).where(Job.id == body["job"]["id"]))
+        assert job.speeds == "rapid"
+
+
+@pytest.mark.asyncio
+async def test_unfiltered_search_leaves_job_speeds_null(client, db_sessionmaker):
+    from sqlalchemy import select
+
+    from app.models import Job
+
+    await _seed_speeds(db_sessionmaker, ["bullet", "rapid"], processed=False)
+
+    resp = await client.get(
+        "/api/players/speedy/puzzles", params={"preset": "custom", "threshold": 10}
+    )
+    body = resp.json()
+    assert body["job"]["total"] == 2
+
+    async with db_sessionmaker() as db:
+        job = await db.scalar(select(Job).where(Job.id == body["job"]["id"]))
+        assert job.speeds is None  # NULL keeps meaning "every time control"

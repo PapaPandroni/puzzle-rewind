@@ -40,6 +40,17 @@ logger = logging.getLogger(__name__)
 UsernamePath = Annotated[str, Path(pattern=r"^[a-zA-Z0-9_-]{2,30}$")]
 Preset = Literal["auto", "beginner", "intermediate", "advanced", "expert", "custom"]
 Period = Literal["last20", "day", "week", "month", "year", "all"]
+Speed = Literal["all", "bullet", "blitz", "rapid", "classical"]
+
+# Chip -> the raw Lichess `speed` values it covers. The two rare speeds are
+# folded into their nearest neighbour rather than given chips of their own, so
+# nothing already in the DB is reachable only under "all".
+SPEED_GROUPS: dict[str, tuple[str, ...]] = {
+    "bullet": ("ultraBullet", "bullet"),
+    "blitz": ("blitz",),
+    "rapid": ("rapid",),
+    "classical": ("classical", "correspondence"),
+}
 
 _PERIOD_LENGTHS: dict[str, timedelta] = {
     "day": timedelta(days=1),
@@ -56,6 +67,11 @@ def _period_start(period: Period) -> datetime | None:
     if period == "all":
         return datetime(1970, 1, 1)
     return utcnow() - _PERIOD_LENGTHS[period]
+
+
+def _speed_values(speed: Speed) -> tuple[str, ...] | None:
+    """Raw Lichess speeds the chip selects; None for "all" (no filter at all)."""
+    return SPEED_GROUPS.get(speed)
 
 
 def _period_cap(period: Period) -> int:
@@ -319,10 +335,10 @@ async def _sync_player_games(
 
 
 async def _ensure_job(
-    db: AsyncSession, player: Player, period_start: datetime | None
+    db: AsyncSession, player: Player, period_start: datetime | None, speeds: tuple[str, ...] | None
 ) -> Job | None:
     """Return the player's pending analysis job, creating one if unprocessed
-    games exist *within the searched window* (§14.1). At most one
+    games exist *within the searched window and time controls* (§14.1). At most one
     queued/running job per player; `total` is capped per search, so repeat
     searches drain a larger in-window backlog chunk by chunk with no
     scheduler. Budget fuses are checked by the worker, never here (single
@@ -340,18 +356,21 @@ async def _ensure_job(
     )
     if period_start is not None:
         backlog_query = backlog_query.where(Game.played_at >= period_start)
+    if speeds is not None:
+        backlog_query = backlog_query.where(Game.speed.in_(speeds))
     backlog = await db.scalar(backlog_query)
     if not backlog:
         return None
     pending = await _pending_job(db, player.id)
     if pending is not None:
-        # May be scoped to a different window; still returned to keep the
-        # one-job-per-player invariant. Self-healing: when it finishes, the
-        # next search queues a correctly scoped job for the remainder.
+        # May be scoped to a different window or time control; still returned to
+        # keep the one-job-per-player invariant. Self-healing: when it finishes,
+        # the next search queues a correctly scoped job for the remainder.
         return pending
     job = Job(
         player_id=player.id,
         period_start=period_start,
+        speeds=",".join(speeds) if speeds is not None else None,
         total=min(backlog, settings.max_engine_games_per_search),
         created_at=utcnow(),
     )
@@ -415,6 +434,7 @@ async def get_player_puzzles(
     threshold: Annotated[int | None, Query(ge=10, le=40)] = None,
     preset: Preset = "auto",
     period: Period = "last20",
+    speed: Speed = "all",
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
 ):
     username = username.lower()
@@ -426,6 +446,10 @@ async def get_player_puzzles(
     )
 
     period_start = _period_start(period)
+    # Purely read-side: the Lichess fetch stays unfiltered (§14 keeps the
+    # coverage invariants speed-blind), so the pool always covers every speed
+    # and switching time controls never costs a refetch.
+    speeds = _speed_values(speed)
     # Backward fill is gated on coverage, not TTL: it runs whenever the window
     # reaches further back than anything fetched so far (§13.2).
     needs_backfill = period_start is not None and (
@@ -451,12 +475,14 @@ async def get_player_puzzles(
     # Queue engine analysis for unprocessed games in the searched window —
     # checked even on cache-fresh hits, so a >40-game backlog drains across
     # searches and a budget-failed job gets re-queued the next day.
-    job = await _ensure_job(db, player, period_start)
+    job = await _ensure_job(db, player, period_start, speeds)
     job_status = JobStatus.model_validate(job) if job is not None else None
 
     games_query = select(Game).where(Game.player_id == player.id).options(selectinload(Game.puzzles))
     if period_start is not None:
         games_query = games_query.where(Game.played_at >= period_start)
+    if speeds is not None:
+        games_query = games_query.where(Game.speed.in_(speeds))
     games_result = await db.scalars(games_query)
     games = games_result.all()
 
@@ -465,7 +491,19 @@ async def get_player_puzzles(
             has_any = await db.scalar(
                 select(Game.id).where(Game.player_id == player.id).limit(1)
             )
-            reason = "no_games_in_period" if has_any is not None else "no_games"
+            if has_any is None:
+                reason = "no_games"
+            else:
+                # Distinguish "wrong time control" from "wrong period" so the
+                # frontend can point at the control that actually emptied the
+                # set. The extra query only runs on an empty result.
+                reason = "no_games_in_period"
+                if speeds is not None:
+                    in_period_query = select(Game.id).where(Game.player_id == player.id).limit(1)
+                    if period_start is not None:
+                        in_period_query = in_period_query.where(Game.played_at >= period_start)
+                    if await db.scalar(in_period_query) is not None:
+                        reason = "no_games_in_speed"
         return PuzzleSetResponse(
             username=username,
             player_ratings_seen=[],

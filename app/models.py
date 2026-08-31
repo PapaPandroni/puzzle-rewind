@@ -103,7 +103,8 @@ class Job(Base):
 
     No params blob: the work set is defined by DB state — the player's
     unprocessed games (raw_analysis_processed=False) within `period_start`
-    (NULL = whole pool), newest first, up to `total`. Puzzles are always
+    (NULL = whole pool) and `speeds` (NULL = every time control), newest
+    first, up to `total`. Puzzles are always
     stored at min_win_drop_stored, so the user's threshold never matters at
     analysis time.
     """
@@ -115,6 +116,12 @@ class Job(Base):
     # Start of the searched window this job serves; NULL = whole accumulated
     # pool (period "last20"). Naive UTC like the rest.
     period_start: Mapped[datetime | None]
+    # Time controls the search that queued this job was filtered to, as
+    # comma-joined raw Lichess speeds ("ultraBullet,bullet"). NULL = every
+    # speed, mirroring period_start's NULL = whole pool. Stored resolved rather
+    # than as the UI's chip name so the worker needs no knowledge of the
+    # grouping — analysis budget then goes to games the search can display.
+    speeds: Mapped[str | None] = mapped_column(String(60))
     status: Mapped[str] = mapped_column(
         String(10), default="queued", index=True
     )  # queued | running | done | failed

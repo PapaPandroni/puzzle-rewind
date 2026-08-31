@@ -149,6 +149,10 @@ async def service_one_game(sessionmaker: async_sessionmaker[AsyncSession]) -> bo
                     # Scoped job (§14.1): only games the search that queued
                     # it can display. NULL scope = whole pool.
                     game_query = game_query.where(Game.played_at >= job.period_start)
+                if job.speeds:
+                    # Same rule for the time-control filter: a rapid-only search
+                    # must not spend its engine budget on the bullet backlog.
+                    game_query = game_query.where(Game.speed.in_(job.speeds.split(",")))
                 game = await db.scalar(game_query)
             if game is None:
                 job.status = "done"

@@ -48,6 +48,30 @@ const PERIOD_CONTEXT = {
   all: "from all time",
 };
 
+// No entry for "all": an unfiltered set names no time control, exactly as
+// "last20" names no period.
+const SPEED_CONTEXT = {
+  bullet: "bullet",
+  blitz: "blitz",
+  rapid: "rapid",
+  classical: "classical",
+};
+
+/** " · rapid · from the last month (24 games)" — what the set was narrowed to,
+ * so a thin stream reads as a filter rather than a shortage. Empty when neither
+ * filter is set, which is the unfiltered "Last 20" default. */
+function contextCopy() {
+  const parts = [SPEED_CONTEXT[state.speed], PERIOD_CONTEXT[state.period]].filter(Boolean);
+  if (parts.length === 0) return "";
+  // While a backlog is cooking, "(187 games)" would read as "only these
+  // puzzles in 187 games" — name the analyzed subset.
+  const counted =
+    state.gamesAnalyzed < state.gamesScanned
+      ? `${state.gamesAnalyzed} of ${state.gamesScanned} games analyzed`
+      : `${state.gamesScanned} games`;
+  return ` &middot; ${parts.join(" &middot; ")} (${counted})`;
+}
+
 export function renderPuzzle() {
   appEl.innerHTML = "";
   playToken++;
@@ -78,17 +102,7 @@ export function renderPuzzle() {
         <button id="give-up-btn" class="link-btn">${lineMode ? "Give up / show the line" : "Give up / show solution"}</button>
         ${lm ? `<button id="replay-opp-btn" class="link-btn">&#8634; Replay opponent's move</button>` : ""}
       </div>
-      <div class="puzzle-counter">Puzzle ${state.index + 1} of ${state.puzzles.length}${
-        PERIOD_CONTEXT[state.period]
-          ? ` &middot; ${PERIOD_CONTEXT[state.period]} (${
-              // While a backlog is cooking, "(187 games)" would read as
-              // "only these puzzles in 187 games" — name the analyzed subset.
-              state.gamesAnalyzed < state.gamesScanned
-                ? `${state.gamesAnalyzed} of ${state.gamesScanned} games analyzed`
-                : `${state.gamesScanned} games`
-            })`
-          : ""
-      }</div>
+      <div class="puzzle-counter">Puzzle ${state.index + 1} of ${state.puzzles.length}${contextCopy()}</div>
       <p class="thanks-note">Thank you <a href="https://lichess.org" target="_blank" rel="noopener">Lichess</a> for being open source and awesome.</p>
     </div>
   `);

@@ -149,7 +149,6 @@ h2 {
 
 .slider-label {
   display: block;
-  margin-top: 10px;
   font-size: 0.9rem;
   color: var(--text-dim);
 }
@@ -164,10 +163,18 @@ h2 {
   cursor: not-allowed;
 }
 
+/* One labelled control: its hint sits directly above the row it describes, and
+   the tighter inner gap binds the pair together inside the form's 16px rhythm. */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .hint {
   color: var(--text-dim);
   font-size: 0.8rem;
-  margin: 4px 0 0;
+  margin: 0;
 }
 
 .search-btn,

@@ -10,6 +10,7 @@ export const state = {
   threshold: null,
   mode: "single", // "single" | "line" (multi-move, §13.1)
   period: "last20", // last20 | day | week | month | year | all (§13.2)
+  speed: "all", // all | bullet | blitz | rapid | classical (time control of the source game)
   puzzles: [],
   gamesScanned: 0,
   gamesAnalyzed: 0, // subset of gamesScanned already analyzed (Lichess or engine)

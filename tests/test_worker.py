@@ -53,8 +53,14 @@ async def _run_until_idle(sessionmaker) -> None:
 
 
 async def _seed(
-    db, n_unprocessed: int, *, username: str = "engineuser", color: str = "white"
+    db,
+    n_unprocessed: int,
+    *,
+    username: str = "engineuser",
+    color: str = "white",
+    speeds: list[str] | None = None,
 ) -> Player:
+    """`speeds`, when given, sets game i's time control (default all blitz)."""
     player = Player(username=username)
     db.add(player)
     await db.flush()
@@ -67,7 +73,7 @@ async def _seed(
                 player_rating=1500,
                 opponent_name="opp",
                 opponent_rating=1500,
-                speed="blitz",
+                speed=speeds[i] if speeds is not None else "blitz",
                 played_at=NOW - timedelta(days=i),
                 raw_analysis_processed=False,
                 eval_source="stockfish",
@@ -79,13 +85,18 @@ async def _seed(
 
 
 async def _queue_job(
-    db, player: Player, total: int, period_start: datetime | None = None
+    db,
+    player: Player,
+    total: int,
+    period_start: datetime | None = None,
+    speeds: str | None = None,
 ) -> Job:
     job = Job(
         player_id=player.id,
         status="queued",
         total=total,
         period_start=period_start,
+        speeds=speeds,
         created_at=utcnow(),
     )
     db.add(job)
@@ -170,6 +181,47 @@ async def test_worker_skips_out_of_period_games(db_sessionmaker, monkeypatch):
             select(Game).where(Game.lichess_id == "engine0002")
         )
         assert out_of_scope.raw_analysis_processed is False  # never touched
+
+
+async def test_worker_skips_out_of_speed_games(db_sessionmaker, monkeypatch):
+    # The point of the time-control filter: a rapid-scoped search must not
+    # spend the engine budget on the bullet backlog it will never display.
+    _patch_extract(monkeypatch, [([{"eval": 0}], [])])
+
+    async with db_sessionmaker() as db:
+        player = await _seed(db, 3, speeds=["bullet", "rapid", "bullet"])
+        # total overshoots the in-scope set (1 rapid game): the worker finishes
+        # via the game-is-None branch rather than leaking out of scope.
+        job = await _queue_job(db, player, total=3, speeds="rapid")
+
+    await _run_until_idle(db_sessionmaker)
+
+    async with db_sessionmaker() as db:
+        job = await db.get(Job, job.id)
+        assert job.status == "done"
+        assert job.progress == 1
+        for lichess_id in ("engine0000", "engine0002"):
+            out_of_scope = await db.scalar(
+                select(Game).where(Game.lichess_id == lichess_id)
+            )
+            assert out_of_scope.raw_analysis_processed is False
+
+
+async def test_worker_null_speeds_analyzes_every_time_control(db_sessionmaker, monkeypatch):
+    # Jobs queued before the column existed (and every unfiltered search) carry
+    # speeds=NULL, which must keep meaning "no filter".
+    _patch_extract(monkeypatch, [([{"eval": 0}], [])])
+
+    async with db_sessionmaker() as db:
+        player = await _seed(db, 2, speeds=["bullet", "classical"])
+        job = await _queue_job(db, player, total=2, speeds=None)
+
+    await _run_until_idle(db_sessionmaker)
+
+    async with db_sessionmaker() as db:
+        job = await db.get(Job, job.id)
+        assert job.status == "done"
+        assert job.progress == 2
 
 
 async def test_worker_marks_done_when_in_period_set_exhausted(
